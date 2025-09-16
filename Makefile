@@ -1,12 +1,12 @@
 CC = gcc
-LIBS = -lX11 -lm
+LIBS = -lm -lX11 -lGL -lGLU
 
-CFLAGS   = -g -pedantic -Wall -O0 ${INCS} ${CPPFLAGS}
-#CFLAGS   = -pedantic -Wall -Wno-deprecated-declarations -Os ${INCS} ${CPPFLAGS}
+#CFLAGS   = -g -pedantic -Wall -O0
+CFLAGS   = -pedantic -Wall -Wno-deprecated-declarations -Os
 LDFLAGS  = ${LIBS}
 
 
-SRC = main.c
+SRC = main.c fluid.c
 OBJ = ${SRC:.c=.o}
 
 all: out
@@ -14,7 +14,7 @@ all: out
 .c.o:
 	${CC} -c ${CFLAGS} $<
 
-#${OBJ}: 
+${OBJ}: fluid.h
 
 out: ${OBJ}
 	${CC} -o $@ ${OBJ} ${LDFLAGS}
