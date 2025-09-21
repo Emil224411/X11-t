@@ -306,13 +306,6 @@ int init(void)
 	Colormap cmap = XCreateColormap(d, root, vi->visual, AllocNone);
 	XSetWindowAttributes swa;
 
-	/* TODO:
-	 * possible error cmap is allocated on the stack
-	 * if swa.colormap is accessed after init() is done then
-	 * 		it will proberly be random since its not allocated anymore
-	 * 		but it hasnt been a issue yet so im not going to change it
-	 * 		even tho it would have been less work then writing this
-	 */
 	swa.colormap = cmap;
 	swa.event_mask =  KeyPressMask
 					| PointerMotionMask
