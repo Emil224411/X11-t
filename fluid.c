@@ -1,10 +1,11 @@
 #include "fluid.h"
 
-void add_source(int n, float *x, float *s, float dt) 
+void add_source(int n, float *to, float *from, float dt) 
 {
     int size = (n+2)*(n+2);
 	
-    for (int i = 0; i < size; i++) x[i] += dt*s[i];
+    for (int i = 0; i < size; i++) 
+		to[i] += dt*from[i];
 }
 
 void set_bnd(int n, int b, float *x) 
@@ -20,6 +21,7 @@ void set_bnd(int n, int b, float *x)
 	x[IX(n+1,   0)] = 0.5*(x[IX(n,   0)]+x[IX(n+1, 1)]);
 	x[IX(n+1, n+1)] = 0.5*(x[IX(n, n+1)]+x[IX(n+1, n)]);
 }
+
 
 void diffuse(int n, int b, float *x, float *x0, float diff, float dt) 
 {
@@ -98,29 +100,36 @@ void project(int n, float *u, float *v, float *p, float *div)
 
 void dens_step(int n, float *x, float *x0, float *u, float *v, float diff, float dt) 
 {
-    add_source(n, x, x0, dt);
+    add_source(N, x, x0, dt);
     SWAP(x0, x); 
-	diffuse(n, 0, x, x0, diff, dt);
+	diffuse(N, 0, x, x0, diff, dt);
     SWAP(x0, x); 
-	advect (n, 0, x, x0, u, v, dt);
+	advect (N, 0, x, x0, u, v, dt);
 }
 
+//vel_step (N, u, v, u_prev, v_prev, VISC, dt);
 void vel_step(int n, float *u, float *v, float *u0, float *v0, float visc, float dt) 
 {
-    add_source(n, u, u0, dt); 
-	add_source(n, v, v0, dt);
+    add_source(N, u, u0, dt); 
+	add_source(N, v, v0, dt);
 
     SWAP(u0, u); 
-	diffuse(n, 1, u, u0, visc, dt);
+	diffuse(N, 1, u, u0, visc, dt);
     SWAP(v0, v); 
-	diffuse(n, 2, v, v0, visc, dt);
+	diffuse(N, 2, v, v0, visc, dt);
 
-    project(n, u, v, u0, v0);
+    project(N, u, v, u0, v0);
 
     SWAP(u0, u); 
 	SWAP(v0, v);
-    advect(n, 1, u, u0, u0, v0, dt); 
-	advect(n, 2, v, v0, u0, v0, dt);
+    advect(N, 1, u, u0, u0, v0, dt); 
+	advect(N, 2, v, v0, u0, v0, dt);
 	
-    project(n,u,v,u0,v0);
+    project(N, u, v, u0, v0);
 }
+
+
+
+
+
+

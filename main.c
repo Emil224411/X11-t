@@ -1,298 +1,466 @@
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
-
 #include <time.h>
 #include <math.h>
 #include <memory.h>
+#include <string.h>
+#include <sys/stat.h>
 
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
-
+#include <GL/glew.h>
 #include <GL/gl.h>
-#include <GL/glu.h>
+#include <GL/glx.h>
 
 #include "fluid.h"
 
-#define TARGET_FPS 30
+#define TARGET_FPS 60
 #define FRAME_TIME_NS (1000000000 / TARGET_FPS)
-#define NS_TO_MS(NS)  (NS / 1000000)
-#define MS_TO_S(MS)   (MS / 1000.0)
 
-#define WIDTH (800)
-#define HEIGHT (800)
-#define SCREEN_WIDTH (WIDTH*1)
-#define SCREEN_HEIGHT (HEIGHT*1)
-#define SCREEN_WIDTH_RATIO (SCREEN_WIDTH/WIDTH)
-#define SCREEN_HEIGHT_RATIO (SCREEN_HEIGHT/HEIGHT)
+#define WIDTH 1002
+#define HEIGHT 1002
 
-#define DIFF 0.0002f
-#define VISC 0.0002f
+#define DIFF 0.0001f
+#define VISC 0.0001f
 
 typedef long long ns_t;
 
-bool has_pixels_changed = false;
-uint32_t *pixels;
-uint32_t *window_pixels;
+typedef struct {
+	size_t type;
+	unsigned int sID, ID;
+	char *code;
+	size_t code_size;
+	bool loaded;
+} Shader;
 
-float u[SIZE], v[SIZE], u_prev[SIZE], v_prev[SIZE];
+struct ssbo_data { 
+	float dt; 
+	float dens[SIZE]; 
+};
+
+Window w;
+Display *d;
+GLXContext glc;
+Atom wm_delete_window;
+
+Shader sc, sf, sv;
+unsigned int screen_texture;
+
+int prev_x = 0, prev_y = 0, prev_mtime = 0;
+
 float dens[SIZE], dens_prev[SIZE];
+float u[SIZE], v[SIZE], u_prev[SIZE], v_prev[SIZE];
 
-ns_t now_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (ns_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
-}
+int init(void);
+ns_t now_ns(void);
+void renderQuad(void);
+int init_shaders(void);
+void compile_shader(Shader *s);
+bool handle_Xevents(XEvent ev);
+void create_c_shader(Shader *s);
+bool handle_KeyPress(XKeyEvent ke);
+void create_screen_texture(GLuint ID);
+void create_vf_shaders(Shader *v, Shader *f);
+void checkCompileErrors(GLuint shader, char *type);
+Shader load_shader_code(const char *path, GLenum type);
+void mouse_moved(XMotionEvent e, int prev_x, int prev_y, int prev_time);
+GLuint create_ssbo(void *data, size_t sizeof_data, size_t index, GLenum usage);
 
-static inline void set_pixel(uint32_t *p, size_t pw, 
-							 int x, int y, 
-							 uint8_t r, uint8_t g, uint8_t b, uint8_t a) 
+int main(void) 
 {
-    p[x + pw * y] = a<<24 | r<<16 | g<<8 | b;
-}
+	if (init()) {
+		fprintf(stderr, "Error: init failed\n");
+		return -1;
+	}
+	if (init_shaders()) {
+		fprintf(stderr, "Error: init_shaders failed\n");
+		glXMakeCurrent(d, None, NULL);
+		glXDestroyContext(d, glc);
+		XDestroyWindow(d, w);
+		XCloseDisplay(d);
+		return -1;
+	}
+	create_screen_texture(sv.ID);
 
-void set_pixels(uint32_t *p, size_t pw,
-				size_t x, size_t y,
-				size_t w, size_t h,
-				uint8_t r, uint8_t g, uint8_t b, uint8_t a)
-{
-	for (int y0 = y; y0 < h + y; y0++) {
-		for (int x0 = x; x0 < w + x; x0++) {
-			p[x0 + pw * y0] = a << 24 | r << 16 | g << 8 | b;
+	glUseProgram(sc.ID);
+	struct ssbo_data some_date = { 1.0, {0}};
+	GLuint ssboid = create_ssbo(&some_date, sizeof(some_date), 1, GL_DYNAMIC_DRAW);
+
+
+	ns_t current_t , prev_t = now_ns();
+	
+	XEvent ev; 
+	bool quit = false;
+	while (!quit) {
+		ns_t frame_start = now_ns();
+		while (XPending(d) > 0) {
+			XNextEvent(d,&ev);
+			quit = handle_Xevents(ev);
+		}
+
+		current_t = now_ns();
+		float dt = (float)(current_t - prev_t) / 1e9f;
+		prev_t = current_t;
+
+		glUseProgram(sc.ID);
+		glDispatchCompute(WIDTH, HEIGHT, 1);
+		glMemoryBarrier(GL_ALL_BARRIER_BITS);
+
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+		glUseProgram(sv.ID);
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, screen_texture);
+		renderQuad();
+
+		glXSwapBuffers(d, w);
+
+		ns_t frame_end = now_ns();
+		ns_t frame_time = frame_end - frame_start;
+		if (frame_time < FRAME_TIME_NS) {
+			ns_t sleep_ns = FRAME_TIME_NS - frame_time;
+			struct timespec ts; 
+			ts.tv_sec  = sleep_ns / 1000000000LL; 
+			ts.tv_nsec = sleep_ns % 1000000000LL;
+			nanosleep(&ts, NULL);
 		}
 	}
-	//memset(&p[x + pw * y], a << 24|r<<16|g<<8|b, w * h);
-	has_pixels_changed = true;
+
+	free(sc.code);
+	free(sv.code);
+	free(sf.code);
+	glXMakeCurrent(d, None, NULL);
+	glXDestroyContext(d, glc);
+	XDestroyWindow(d, w);
+	XCloseDisplay(d);
+	return 0;
 }
 
-void pixels_to_window(uint32_t *p, size_t pw, size_t ph) {
-    if (!has_pixels_changed) return;
-    int wr = SCREEN_WIDTH  / pw;
-    int hr = SCREEN_HEIGHT / ph;
-    for (int y = 0; y < SCREEN_HEIGHT; y++) {
-        for (int x = 0;x < SCREEN_WIDTH; x++) {
-            window_pixels[x + SCREEN_WIDTH * y] = p[(x / wr) + pw * (y / hr)];
-        }
-    }
-    has_pixels_changed = false;
-}
-
-void circle(uint32_t *p, size_t pw,
-	size_t x, size_t y, 
-	size_t radius, 
-	uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+bool handle_KeyPress(XKeyEvent ke) 
 {
-	int t1 = radius >> 4;
-	int t2 = 0;
-	int x0 = radius;
-	int y0 = 0;
+	bool should_quit = false;
+	switch (XLookupKeysym(&ke, 0)) {
+		case 'q':
+			should_quit = true;
+			break;
+	}
+	return should_quit;
+}
 
-	while (x0 >= y0) {
-		set_pixel(p, pw, x + x0, y + y0, r, g, b, a);
-		set_pixel(p, pw, x + x0, y - y0, r, g, b, a);
-		set_pixel(p, pw, x - x0, y + y0, r, g, b, a);
-		set_pixel(p, pw, x - x0, y - y0, r, g, b, a);
+bool handle_Xevents(XEvent ev)
+{
+	bool should_quit = false;
+	switch (ev.type) {
+		case KeyPress:
+			should_quit = handle_KeyPress(ev.xkey);
+			break;
+		case MotionNotify:
+			mouse_moved(ev.xmotion, prev_x, prev_y, prev_mtime);
+			prev_mtime = ev.xmotion.time;
+			prev_x     = ev.xmotion.x; 
+			prev_y     = ev.xmotion.y;
+			break;
+		case ClientMessage:
+			if ((Atom)ev.xclient.data.l[0] == wm_delete_window)
+				should_quit = true;
+		break;
+	}
+	return should_quit;
+}
 
-		set_pixel(p, pw, x + y0, y + x0, r, g, b, a);
-		set_pixel(p, pw, x + y0, y - x0, r, g, b, a);
-		set_pixel(p, pw, x - y0, y + x0, r, g, b, a);
-		set_pixel(p, pw, x - y0, y - x0, r, g, b, a);
-		y0 = y0 + 1;
-		t1 = t1 + y0;
-		t2 = t1 - x0;
-		if (t2 >= 0) {
-			t1 = t2;
-			x0 = x0 - 1;
+ns_t now_ns(void) 
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (ns_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+void checkCompileErrors(GLuint shader, char *type) 
+{
+	GLint success = 0;
+	GLchar infoLog[1024] = "";
+	if (strcmp(type, "PROGRAM") == 0) {
+		glGetProgramiv(shader, GL_LINK_STATUS, &success);
+		if (!success) {
+			glGetProgramInfoLog(shader, 1024, NULL, infoLog);
+			fprintf(stderr, "Error: Program linking err: \n%s\n", infoLog);
+		}
+	} else {
+		glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
+		if (success == GL_FALSE) {
+			glGetShaderInfoLog(shader, 1024, NULL, infoLog);
+			fprintf(stderr, "Error: Shader Compile err: \n%s\n", infoLog);
 		}
 	}
-	has_pixels_changed = true;
 }
 
-void plotLine(uint32_t *p, size_t pw, 
-			  int x0, int y0, 
-			  int x1, int y1, 
-			  uint8_t r, uint8_t g, uint8_t b, uint8_t a) 
+void mouse_moved(XMotionEvent e, int prev_x, int prev_y, int prev_time) 
 {
-	int dx = abs(x1 - x0);
-	int sx = x0 < x1 ? 1 : -1;
-	int dy = -abs(y1 - y0);
-	int sy = y0 < y1 ? 1 : -1;
-	int error = dx + dy;
-	for (;;) {
-		set_pixel(p, pw, (x0 >= 0 ? x0 : 0), (y0 >= 0 ? y0 : 0), r, g, b, a);
-		int e2 = 2 * error;
-		if (e2 >= dy) {
-			if (x0 == x1) break;
-			error += dy;
-			x0 += sx;
-		}
-		if (e2 <= dx) {
-			if (y0 == y1) break;
-			error += dx;
-			y0 += sy;
-		}
+	int x = e.x;
+	int y = e.y;
+
+	int px = prev_x;
+	int py = prev_y;
+	int dx = x - px;
+	int dy = y - py;
+	
+	int dt = e.time - prev_time;
+	if (dt <= 0) dt = 1;
+	
+	float speed = sqrtf(dx*dx + dy*dy) / (float)dt;
+	float force = speed * 200;
+	
+	dens_prev[IX(x, y)] += force;
+	u_prev[IX(x, y)] += dx * speed * 15.0f;
+	v_prev[IX(x, y)] += dy * speed * 15.0f;
+	//u[IX(x, (N+2-y))] = 1.0;
+}
+
+Shader load_shader_code(const char *path, GLenum type)
+{
+	Shader return_shader = { .type = type, .loaded = false };
+	FILE *shader_file;
+
+	shader_file = fopen(path, "r");
+	if (shader_file == NULL) {
+		fprintf(stderr, "Error: load_shader_code failed to open shader file at %s\n", path);
+		return return_shader;
 	}
-	has_pixels_changed = true;
+
+	fseek(shader_file, 0, SEEK_END);
+	size_t size = ftell(shader_file);
+	fseek(shader_file, 0, SEEK_SET);
+
+	return_shader.code_size = size;
+	return_shader.code = calloc(size, sizeof(char));
+	if (return_shader.code == NULL) {
+		fprintf(stderr, "Error: load_shader_code failed to calloc return_shader.code, size %ld\n", size);
+		fclose(shader_file);
+		return return_shader;
+	}
+
+	fread(return_shader.code, 1, size, shader_file);
+
+	return_shader.loaded = true;
+
+	fclose(shader_file);
+	return return_shader;
 }
 
-void dens_to_pixels(uint32_t *p, int pw, float *dens, int n) 
+void create_c_shader(Shader *s) 
 {
-	float r = (float)pw/n;
-    for (int x = 0; x <= n; x++) {
-        for (int y = 0; y <= n; y++) {
-            int i = (i = (int)(dens[IX(x,y)] * 255)) > 255 ? 255 : (i < 0) ? 0 : i;
-            set_pixel(p, pw, x*r,   y*r  , i, i, i, i);
-            set_pixel(p, pw, x*r+1, y*r  , i, i, i, i);
-            set_pixel(p, pw ,x*r,   y*r+1, i, i, i, i);
-            set_pixel(p, pw ,x*r+1, y*r+1, i, i, i, i);
-        }
-    }
-    has_pixels_changed = true;
+	compile_shader(s);
+	checkCompileErrors(s->sID, "COMPUTE");
+
+	s->ID = glCreateProgram();
+	glAttachShader(s->ID, s->sID);
+	glLinkProgram(s->ID);
+	checkCompileErrors(s->ID, "PROGRAM");
+	glDeleteShader(s->sID);
 }
 
-void mouse_moved(XMotionEvent e, int prev_x, int prev_y, int prev_time) {
-    int x = e.x / (SCREEN_WIDTH  / N);
-    int y = e.y / (SCREEN_HEIGHT / N);
+void create_vf_shaders(Shader *v, Shader *f)
+{
+	compile_shader(v);
+	checkCompileErrors(v->sID, "VERTEX");
+	compile_shader(f);
+	checkCompileErrors(f->sID, "FRAGMENT");
 
-    int px = prev_x / (SCREEN_WIDTH  / N);
-    int py = prev_y / (SCREEN_HEIGHT / N);
-    int dx = x - px;
-    int dy = y - py;
+	unsigned int ID = f->ID = v->ID = glCreateProgram();
+	glAttachShader(ID, f->sID);
+	glAttachShader(ID, v->sID);
+	glLinkProgram(ID);
+	checkCompileErrors(ID, "PROGRAM");
 
-    int dt = e.time - prev_time;
-    if (dt <= 0) dt = 1;
-
-    float speed = sqrtf(dx*dx + dy*dy) / (float)dt;
-    float force = speed * 350.0f;
-
-    dens_prev[IX(x, y)] += force;
-    u_prev[IX(x, y)] += dx * speed * 15.0f;
-    v_prev[IX(x, y)] += dy * speed * 15.0f;
+	glDeleteShader(f->sID);
+	glDeleteShader(v->sID);
 }
 
-int main(void) {
-    Display *d = XOpenDisplay(NULL);
-    if (!d) { 
+void compile_shader(Shader *s)
+{
+	s->sID = glCreateShader(s->type);
+	glShaderSource(s->sID, 1, (const char *const*)&s->code, NULL);
+	glCompileShader(s->sID);
+}
+
+int init(void)
+{
+	d = XOpenDisplay(NULL);
+	if (!d) { 
 		fprintf(stderr,"Error: XOpenDisplay failed\n"); 
 		return -1; 
 	}
+	Window root = DefaultRootWindow(d);
+	GLint att[] = { GLX_RGBA, GLX_DEPTH_SIZE, 24, GLX_DOUBLEBUFFER, None };
 
-    Window w = XCreateSimpleWindow(d, 
-								   DefaultRootWindow(d),
-								   0, 
-								   0, 
-								   SCREEN_WIDTH, 
-								   SCREEN_HEIGHT, 
-								   0, 
-								   0, 
-								   0xff000000);
-
-    XWindowAttributes wa; 
-	XGetWindowAttributes(d,w,&wa);
-
-    window_pixels = malloc(SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(*window_pixels));
-    	   pixels = malloc(WIDTH * HEIGHT * sizeof(*pixels));
-    if (!window_pixels || !pixels) { 
-		fprintf(stderr,"Error: Memory alloc failed\n"); 
-		return -1; 
+	XVisualInfo *vi = glXChooseVisual(d, 0, att);
+	if (vi == NULL) {
+		fprintf(stderr, "Error: glXChooseVisual failed\n");
+		XCloseDisplay(d);
+		return -1;
 	}
 
-    XImage *img = XCreateImage(d,
-							   wa.visual,
-							   wa.depth,
-							   ZPixmap,
-							   0,
-							   (char*)window_pixels,
-							   SCREEN_WIDTH,
-							   SCREEN_HEIGHT,
-							   32,
-							   SCREEN_WIDTH*sizeof(*window_pixels));
+	Colormap cmap = XCreateColormap(d, root, vi->visual, AllocNone);
+	XSetWindowAttributes swa;
 
-    GC gc = XCreateGC(d, w, 0, NULL);
+	/* TODO:
+	 * possible error cmap is allocated on the stack
+	 * if swa.colormap is accessed after init() is done then
+	 * 		it will proberly be random since its not allocated anymore
+	 * 		but it hasnt been a issue yet so im not going to change it
+	 * 		even tho it would have been less work then writing this
+	 */
+	swa.colormap = cmap;
+	swa.event_mask =  KeyPressMask
+					| PointerMotionMask
+					| ButtonPressMask
+					| ButtonReleaseMask
+					| ButtonMotionMask ;
 
-    Atom wm_delete_window = XInternAtom(d, "WM_DELETE_WINDOW", False);
-    XSetWMProtocols(d, w, &wm_delete_window, 1);
+	w = XCreateWindow(d, 
+					  root, 
+					  0, 
+					  0, 
+					  WIDTH, 
+					  HEIGHT, 
+					  0, 
+					  vi->depth, 
+					  InputOutput, 
+					  vi->visual, 
+					  CWColormap | CWEventMask, 
+					  &swa);
+
+	wm_delete_window = XInternAtom(d, "WM_DELETE_WINDOW", False);
+	XSetWMProtocols(d, w, &wm_delete_window, 1);
 
 	Atom wm_type = XInternAtom(d, "_NET_WM_WINDOW_TYPE", False);
 	Atom wm_type_dialog = XInternAtom(d, "_NET_WM_WINDOW_TYPE_DIALOG", False);
 	XChangeProperty(d, w, wm_type, XA_ATOM, 32, 
-			PropModeReplace, (unsigned char *)&wm_type_dialog, 1);
+				PropModeReplace, (unsigned char *)&wm_type_dialog, 1);
 
-    XSelectInput(d, w, KeyPressMask
-					 | PointerMotionMask
-					 | ButtonPressMask
-					 | ButtonReleaseMask
-					 | ButtonMotionMask );
+	XMapWindow(d, w);
 
-    XMapWindow(d, w);
+	glc = glXCreateContext(d, vi, NULL, GL_TRUE);
+	glXMakeCurrent(d, w, glc);
+	glEnable(GL_DEPTH_TEST);
 
-    memset(u,         0, sizeof(*u        ) * SIZE); 
-	memset(v,         0, sizeof(*v        ) * SIZE);
-    memset(u_prev,    0, sizeof(*u_prev   ) * SIZE); 
-	memset(v_prev,    0, sizeof(*v_prev   ) * SIZE);
-    memset(dens,      0, sizeof(*dens     ) * SIZE); 
-	memset(dens_prev, 0, sizeof(*dens_prev) * SIZE);
+	int glew_error = glewInit();
+	if (glew_error) {
+		fprintf(stderr, "Error: glewInit failed returned: %d, %s\n", glew_error, glewGetErrorString(glew_error));
+		glXMakeCurrent(d, None, NULL);
+		glXDestroyContext(d, glc);
+		XDestroyWindow(d, w);
+		XCloseDisplay(d);
+		return -1;
+	}
+	printf("Info: GL   VER:\t %s\n", glGetString(GL_VERSION));
+	printf("Info: GLSL VER:\t %s\n", glGetString(GL_SHADING_LANGUAGE_VERSION));
+	int maxX, maxY, maxZ;
+	glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, 0, &maxX);
+	glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, 1, &maxY);
+	glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, 2, &maxZ);
+	printf("Info: GL work group count: %d * %d * %d = %ld\n",
+											maxX,maxY,maxZ, (long)maxX * maxY * maxZ);
+	return 0;
+}
 
-	set_pixels(pixels, WIDTH, 0, 0, WIDTH, HEIGHT, 0, 0, 0, 0);
-	pixels_to_window(pixels, WIDTH, HEIGHT);
+unsigned int quadVAO = 0;
+unsigned int quadVBO;
+void renderQuad(void)
+{
+	if (quadVAO == 0) {
+		float quadVertices[] = {
+			-1.0f,  1.0f, 0.0f, 0.0f, 1.0f,
+			-1.0f, -1.0f, 0.0f, 0.0f, 0.0f,
+		 	 1.0f,  1.0f, 0.0f, 1.0f, 1.0f,
+		 	 1.0f, -1.0f, 0.0f, 1.0f, 0.0f
+		};
 
-    int prev_x = 0, prev_y = 0, prev_mtime = 0;
-    ns_t current_t ,prev_t = now_ns();
+		glGenVertexArrays(1, &quadVAO);
+		glGenBuffers(1, &quadVBO);
 
-    bool quit = false;
-    while (!quit) {
-        ns_t frame_start = now_ns();
-        while (XPending(d) > 0) {
-            XEvent ev; XNextEvent(d,&ev);
-            switch (ev.type) {
-				case KeyPress:
-					switch (XLookupKeysym(&ev.xkey, 0)) {
-						case 'q':
-							quit = 1;
-							break;
-					}
-					break;
-                case MotionNotify:
-                    mouse_moved(ev.xmotion, prev_x, prev_y, prev_mtime);
-                    prev_mtime = ev.xmotion.time;
-                    prev_x     = ev.xmotion.x; 
-					prev_y     = ev.xmotion.y;
-                    break;
-                case ClientMessage:
-                    if ((Atom)ev.xclient.data.l[0] == wm_delete_window)
-						quit = true;
-                    break;
-            }
-        }
+		glBindVertexArray(quadVAO);
+		glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
+		glBufferData(GL_ARRAY_BUFFER, sizeof(quadVertices), &quadVertices, GL_STATIC_DRAW);
 
-		current_t = now_ns();
-        float dt = (float)(current_t - prev_t) / 1e9f;
-        prev_t = current_t;
+		glEnableVertexAttribArray(0);
+		glVertexAttribPointer(0, 
+							  3, 
+							  GL_FLOAT, 
+							  GL_FALSE, 
+							  5 * sizeof(float), 
+							  (void*)0);
 
-        vel_step (N, u, v, u_prev, v_prev, VISC, dt);
-        dens_step(N, dens, dens_prev, u, v, DIFF, dt);
+		glEnableVertexAttribArray(1);
+		glVertexAttribPointer(1, 
+							  2, 
+							  GL_FLOAT, 
+							  GL_FALSE, 
+							  5 * sizeof(float), 
+							  (void*)(3*sizeof(float)));
+	}
+	glBindVertexArray(quadVAO);
+	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+	glBindVertexArray(0);
+}
 
-        dens_to_pixels(pixels, WIDTH, dens, N);
+void create_screen_texture(GLuint ID)
+{
+	glUseProgram(ID);
+	glUniform1i(glGetUniformLocation(ID, "tex"), 0);
 
-        pixels_to_window(pixels, WIDTH, HEIGHT);
-        XPutImage(d, w, gc, img, 0, 0, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+	glGenTextures(1, &screen_texture);
+	glBindTexture(GL_TEXTURE_2D, screen_texture);
+	glActiveTexture(GL_TEXTURE0);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, WIDTH, HEIGHT, 0, GL_RGBA, GL_FLOAT, NULL);
 
-        memset(   u_prev, 0, sizeof(   u_prev));
-        memset(   v_prev, 0, sizeof(   v_prev));
-        memset(dens_prev, 0, sizeof(dens_prev));
+	glBindImageTexture(0, screen_texture, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
+}
 
-        ns_t frame_end = now_ns();
-        ns_t frame_time = frame_end - frame_start;
-        if (frame_time < FRAME_TIME_NS) {
-            ns_t sleep_ns = FRAME_TIME_NS - frame_time;
-            struct timespec ts; 
-			ts.tv_sec  = sleep_ns / 1000000000LL; 
-			ts.tv_nsec = sleep_ns % 1000000000LL;
-            nanosleep(&ts, NULL);
-        }
-    }
-    free(pixels);
-    XCloseDisplay(d);
-    return 0;
+GLuint create_ssbo(void *data, size_t sizeof_data, size_t index, GLenum usage) 
+{
+	GLuint ssbo;
+	glGenBuffers(1, &ssbo);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof_data, data, usage);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, index, ssbo);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+	return ssbo;
+}
+
+int init_shaders(void) 
+{
+	char path0[] = "/home/emil/Programming/c/screensaver/compute.comp";
+	char path1[] = "/home/emil/Programming/c/screensaver/test.vert";
+	char path2[] = "/home/emil/Programming/c/screensaver/test.frag";
+	sc = load_shader_code(path0, GL_COMPUTE_SHADER);
+	if (!sc.loaded) {
+		fprintf(stderr, "Error: load_shader_code failed\n");
+		return -1;
+	}
+	sv = load_shader_code(path1, GL_VERTEX_SHADER);
+	if (!sv.loaded) {
+		fprintf(stderr, "Error: load_shader_code failed\n");
+		free(sc.code);
+		return -1;
+	}
+	sf = load_shader_code(path2, GL_FRAGMENT_SHADER);
+	if (!sf.loaded) {
+		fprintf(stderr, "Error: load_shader_code failed\n");
+		free(sv.code);
+		free(sc.code);
+		return -1;
+	}
+
+	create_c_shader(&sc);
+	create_vf_shaders(&sv, &sf);
+
+	return 0;
 }

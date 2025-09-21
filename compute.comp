@@ -1,0 +1,17 @@
+#version 460 core
+
+layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(rgba32f, binding = 0) uniform image2D outimg;
+layout (std430, binding = 1) buffer input_buf { float dt; float dens[]; };
+
+void main()
+{
+	vec4 val = vec4(0.0,0.0,0.0,1.0);
+	ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+
+	val.x = float(pos.x)/(gl_NumWorkGroups.x);
+	val.y = float(pos.y)/(gl_NumWorkGroups.y);
+
+	imageStore(outimg, pos, val);
+}

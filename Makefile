@@ -1,8 +1,8 @@
 CC = gcc
-LIBS = -lm -lX11 -lGL -lGLU
+LIBS = -lm -lX11 -lGLEW -lGL -lGLU
 
-#CFLAGS   = -g -pedantic -Wall -O0
-CFLAGS   = -pedantic -Wall -Wno-deprecated-declarations -Os
+CFLAGS   = -g -pedantic -Wall -O0
+#CFLAGS   = -pedantic -Wall -Wno-deprecated-declarations -Os
 LDFLAGS  = ${LIBS}
 
 
