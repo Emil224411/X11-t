@@ -1,0 +1,80 @@
+#version 460 core
+#define N 250
+#define SIZE ((N+2) * (N+2))
+#define IX(x, y) ((x)+(N+2)*(y))
+
+layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout (std430, binding = 1) buffer input_buf { 
+	float dens[SIZE]; 
+	float u[SIZE]; 
+	float v[SIZE];
+};
+layout (std430, binding = 2) buffer output_buf { 
+	float dens_prev[SIZE]; 
+	float u_prev[SIZE]; 
+	float v_prev[SIZE];
+};
+layout (std430, binding = 3) buffer tmp_buf { 
+	float tmp_dens[SIZE]; 
+	float tmp_u[SIZE]; 
+	float tmp_v[SIZE]; 
+};
+uniform float dt;
+uniform float diff;
+uniform float visc;
+uniform int which;
+uniform int d0;
+
+void main()
+{
+	//uint i = gl_GlobalInvocationID.x + (N+2) * (N+2-gl_GlobalInvocationID.y);
+	uint i = gl_GlobalInvocationID.x;
+
+	//sides
+	//corners
+	if (i == 0) {
+		switch (which) {
+			case 0:
+			u[IX(  0,   0)] = 0.5*(u[IX(1,   0)]+u[IX(  0, 1)]);
+			u[IX(  0, N+1)] = 0.5*(u[IX(1, N+1)]+u[IX(  0, N)]);
+			u[IX(N+1,   0)] = 0.5*(u[IX(N,   0)]+u[IX(N+1, 1)]);
+			u[IX(N+1, N+1)] = 0.5*(u[IX(N, N+1)]+u[IX(N+1, N)]);
+			break;
+			case 1:
+			v[IX(  0,   0)] = 0.5*(v[IX(1,   0)]+v[IX(  0, 1)]);
+			v[IX(  0, N+1)] = 0.5*(v[IX(1, N+1)]+v[IX(  0, N)]);
+			v[IX(N+1,   0)] = 0.5*(v[IX(N,   0)]+v[IX(N+1, 1)]);
+			v[IX(N+1, N+1)] = 0.5*(v[IX(N, N+1)]+v[IX(N+1, N)]);
+			break;
+			case 2:
+			dens[IX(  0,   0)] = 0.5*(dens[IX(1,   0)]+dens[IX(  0, 1)]);
+			dens[IX(  0, N+1)] = 0.5*(dens[IX(1, N+1)]+dens[IX(  0, N)]);
+			dens[IX(N+1,   0)] = 0.5*(dens[IX(N,   0)]+dens[IX(N+1, 1)]);
+			dens[IX(N+1, N+1)] = 0.5*(dens[IX(N, N+1)]+dens[IX(N+1, N)]);
+			break;
+		}
+	} else {
+		switch (which) {
+			case 0:
+				u[IX(  0,   i)] = d0==1 ? -u[IX(1,i)] : u[IX(1,i)];
+				u[IX(N+1,   i)] = d0==1 ? -u[IX(N,i)] : u[IX(N,i)];
+				u[IX(  i,   0)] = d0==2 ? -u[IX(i,1)] : u[IX(i,1)];
+				u[IX(  i, N+1)] = d0==2 ? -u[IX(i,N)] : u[IX(i,N)];
+			break;
+			case 1:
+				v[IX(  0,   i)] = d0==1 ? -v[IX(1,i)] : v[IX(1,i)];
+				v[IX(N+1,   i)] = d0==1 ? -v[IX(N,i)] : v[IX(N,i)];
+				v[IX(  i,   0)] = d0==2 ? -v[IX(i,1)] : v[IX(i,1)];
+				v[IX(  i, N+1)] = d0==2 ? -v[IX(i,N)] : v[IX(i,N)];
+			break;
+			case 2:
+				dens[IX(  0,   i)] = d0==1 ? -dens[IX(1,i)] : dens[IX(1,i)];
+				dens[IX(N+1,   i)] = d0==1 ? -dens[IX(N,i)] : dens[IX(N,i)];
+				dens[IX(  i,   0)] = d0==2 ? -dens[IX(i,1)] : dens[IX(i,1)];
+				dens[IX(  i, N+1)] = d0==2 ? -dens[IX(i,N)] : dens[IX(i,N)];
+			break;
+		} 
+	}
+}
+

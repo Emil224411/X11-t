@@ -1,0 +1,40 @@
+#version 460 core
+#define N 250
+#define SIZE ((N+2) * (N+2))
+#define IX(x, y) ((x)+(N+2)*(y))
+
+layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout (std430, binding = 1) buffer input_buf { 
+	float dens[SIZE]; 
+	float u[SIZE]; 
+	float v[SIZE];
+};
+layout (std430, binding = 2) buffer output_buf { 
+	float dens_prev[SIZE]; 
+	float u_prev[SIZE]; 
+	float v_prev[SIZE];
+};
+layout (std430, binding = 3) buffer tmp_buf { 
+	float tmp_dens[SIZE]; 
+	float tmp_u[SIZE]; 
+	float tmp_v[SIZE]; 
+};
+uniform float dt;
+uniform float diff;
+uniform float visc;
+
+void main()
+{
+	uint x = gl_GlobalInvocationID.x+1;
+	uint y = gl_GlobalInvocationID.y+1;
+	uint i = x + (N+2) * (N+2-y);
+    float h = 1.0f/N;
+	tmp_u[i] = (u[i] +
+				(u_prev[IX(x-1, y  )] + u_prev[IX(x+1, y  )] + 
+				 u_prev[IX(x  , y-1)] + u_prev[IX(x  , y+1)])) / 4;
+	tmp_v[i] = (v[i] + 
+				(v_prev[IX(x-1, y  )] + v_prev[IX(x+1, y  )] + 
+				 v_prev[IX(x  , y-1)] + v_prev[IX(x  , y+1)])) / 4;
+}
+

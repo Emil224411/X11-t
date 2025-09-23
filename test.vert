@@ -6,6 +6,7 @@ out vec2 TexCoords;
 	
 void main()
 {
-	TexCoords = aTexCoords;
+	TexCoords = aTexCoords / 4;
     gl_Position = vec4(aPos, 1.0);
 }
+
