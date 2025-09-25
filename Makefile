@@ -5,16 +5,17 @@ CFLAGS   = -g -pedantic -Wall -O0
 #CFLAGS   = -pedantic -Wall -Wno-deprecated-declarations -Os
 LDFLAGS  = ${LIBS}
 
+DEFINES = -DPROG_DIR=\"$(abspath .)/\"
 
-SRC = main.c fluid.c
+SRC = main.c fluid.c util.c
 OBJ = ${SRC:.c=.o}
 
 all: out
 
 .c.o:
-	${CC} -c ${CFLAGS} $<
+	${CC} -c ${DEFINES} ${CFLAGS} $<
 
-${OBJ}: fluid.h
+${OBJ}: fluid.h util.h
 
 out: ${OBJ}
 	${CC} -o $@ ${OBJ} ${LDFLAGS}

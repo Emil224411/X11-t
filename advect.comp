@@ -1,33 +1,45 @@
 #version 460 core
-#define N 250
+#define N 100
 #define SIZE ((N+2) * (N+2))
 #define IX(x, y) ((x)+(N+2)*(y))
 
 layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
-layout (std430, binding = 1) buffer input_buf { 
-	float dens[SIZE]; 
-	float u[SIZE]; 
-	float v[SIZE];
+layout (std430, binding = 1) buffer input_dens_buf { 
+	float dens_in[SIZE]; 
 };
-layout (std430, binding = 2) buffer output_buf { 
-	float dens_prev[SIZE]; 
-	float u_prev[SIZE]; 
-	float v_prev[SIZE];
+layout (std430, binding = 2) buffer input_u_buf { 
+	float u_in[SIZE]; 
 };
-layout (std430, binding = 3) buffer tmp_buf { 
-	float tmp_dens[SIZE]; 
-	float tmp_u[SIZE]; 
-	float tmp_v[SIZE]; 
+layout (std430, binding = 3) buffer input_v_buf { 
+	float v_in[SIZE];
+};
+layout (std430, binding = 4) buffer output_dens_buf { 
+	float dens_out[SIZE]; 
+};
+layout (std430, binding = 5) buffer output_u_buf { 
+	float u_out[SIZE]; 
+};
+layout (std430, binding = 6) buffer output_v_buf { 
+	float v_out[SIZE];
+};
+layout (std430, binding = 7) buffer tmp_dens_buf { 
+	float dens_tmp[SIZE]; 
+};
+layout (std430, binding = 8) buffer tmp_u_buf { 
+	float u_tmp[SIZE]; 
+};
+layout (std430, binding = 9) buffer tmp_v_buf { 
+	float v_tmp[SIZE]; 
 };
 uniform float dt;
 uniform float diff;
 uniform float visc;
 uniform int b;
 
-void advect()
+void main()
 {
-	uint ind = (gl_GlobalInvocationID.x+1) + (N+2) * (N+2-(gl_GlobalInvocationID.y+1));
+	uint ind = (gl_GlobalInvocationID.x+1) + (N+2) * ((gl_GlobalInvocationID.y+1));
 	uint i = gl_GlobalInvocationID.x+1;
 	uint j = gl_GlobalInvocationID.y+1;
 	//if (x == N+1 || x == 0 || y == N+1 || y == 0) return;
@@ -36,8 +48,8 @@ void advect()
     float x, y, s0, t0, s1, t1, dt0;
 	dt0 = dt * N;
 
-    x = i - dt0 * u[ind];
-    y = j - dt0 * v[ind];
+    x = i - dt0 * u_in[ind];
+    y = j - dt0 * v_in[ind];
     if (x < 0.5f) x = 0.5f; 
 	if (x > N + 0.5f) x = N + 0.5f;
     if (y < 0.5f) y = 0.5f; 
@@ -48,19 +60,16 @@ void advect()
      s1 = x - i0; s0 = 1 - s1;
      t1 = y - j0; t0 = 1 - t1;
 	 if (b == 0) {
-     	u_prev[ind] = s0 * (t0 * u[IX(i0, j0)] + t1 * u[IX(i0, j1)])+
-           			  s1 * (t0 * u[IX(i1, j0)] + t1 * u[IX(i1, j1)]);
+     	u_out[ind] = s0 * (t0 * u_in[IX(i0, j0)] + t1 * u_in[IX(i0, j1)])+
+           			  s1 * (t0 * u_in[IX(i1, j0)] + t1 * u_in[IX(i1, j1)]);
 	 } else if (b == 1) {
-     	v_prev[ind] = s0 * (t0 * v[IX(i0, j0)] + t1 * v[IX(i0, j1)])+
-           			  s1 * (t0 * v[IX(i1, j0)] + t1 * v[IX(i1, j1)]);
+     	v_out[ind] = s0 * (t0 * v_in[IX(i0, j0)] + t1 * v_in[IX(i0, j1)])+
+           			  s1 * (t0 * v_in[IX(i1, j0)] + t1 * v_in[IX(i1, j1)]);
 	 } else if (b == 2) {
-     	dens_prev[ind] = s0 * (t0 * dens[IX(i0, j0)] + t1 * dens[IX(i0, j1)])+
-           			  s1 * (t0 * dens[IX(i1, j0)] + t1 * dens[IX(i1, j1)]);
+     	dens_out[ind] = s0 * (t0 * dens_in[IX(i0, j0)] + t1 * dens_in[IX(i0, j1)])+
+           			  s1 * (t0 * dens_in[IX(i1, j0)] + t1 * dens_in[IX(i1, j1)]);
 	 }
 	 //set_bnd
 }
-void main()
-{
-	advect();
-}
+
 

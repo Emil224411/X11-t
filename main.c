@@ -1,3 +1,6 @@
+#ifndef PROG_DIR
+#error Please define PROG_DIR
+#endif
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,6 +11,8 @@
 #include <memory.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <dirent.h>
+#include <errno.h>
 
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
@@ -16,54 +21,45 @@
 #include <GL/glx.h>
 
 #include "fluid.h"
+#include "util.h"
 
-#define TARGET_FPS 60
+/*
+ *
+ * TODO
+ * Clean up
+ * USE A CONST TIME STEP!!
+ * make DIFF, VISC and DT variable, maby add ui elements for control
+ * think about moving init and related functions to a new file
+ * move gpu functions to new file
+ * create a shotdown function for freeing memory etc
+ *
+ * also make gpu work
+ *
+ */
+
+#define TARGET_FPS 30
 #define FRAME_TIME_NS (1000000000 / TARGET_FPS)
+#define ANY_SHADER_TYPE 0
 
 #define WIDTH 1000
 #define HEIGHT 1000
 
-#define DIFF 0.00005f
+#define U 0
+#define DENS 1
+#define V 2
+#define DIFF 0.00001f
 #define VISC 0.0001f
+//#define DT 0.0001f
 
 typedef GLXContext (*glXCreateContextAttribsARBProc)(Display*, GLXFBConfig, GLXContext, Bool, const int*);
 static glXCreateContextAttribsARBProc glXCreateContextAttribsARB = 0;
 
-typedef long long ns_t;
 
-typedef struct {
-	size_t type;
-	unsigned int sID, ID;
-	char *code;
-	size_t code_size;
-	bool loaded;
-} Shader;
-
-
-struct ssbo_data { 
-	float dens[SIZE]; 
-	float u[SIZE]; 
-	float v[SIZE]; 
-};
-
-//GLuint in_buf_id, out_buf_id, write_buf_id;
-struct buffer_id {
-	GLuint id;
-	size_t binding;
-};
-struct buffers {
-	struct buffer_id read, write, tmp;
-	struct ssbo_data *read_data;
-	struct ssbo_data *write_data;
-	struct ssbo_data *tmp_data;
-};
-struct ssbo_data read_buf = {0};
-struct ssbo_data tmp_buf = {0};
-struct ssbo_data write_buf = {0};
+Shader shaders[10];
 struct buffers all_buffers = { 
-	.tmp_data = &tmp_buf,
-	.write_data = &write_buf, 
-	.read_data = &read_buf 
+	{ {0}, {0}, {0} }, 
+	{ {0}, {0}, {0} }, 
+	{ {0}, {0}, {0} } 
 };
 
 Window w;
@@ -71,14 +67,11 @@ Display *d;
 GLXContext glc;
 Atom wm_delete_window;
 
-GLuint readbuffer = 1;
-GLuint writebuffer = 2;
-GLuint tmpbuffer = 3;
 Shader sc, sf, sv;
 Shader add_source_shader, diffuse_shader;
 Shader advect_shader, set_bnd_shader;
 Shader project_shader, project_s1_shader, project_s2_shader;
-unsigned int screen_texture;
+Shader lin_solve_shader;
 
 int prev_x = 0, prev_y = 0, prev_mtime = 0;
 
@@ -87,71 +80,42 @@ float u[SIZE], v[SIZE], u_prev[SIZE], v_prev[SIZE];
 
 int init(void);
 ns_t now_ns(void);
-void renderQuad(void);
 int init_shaders(void);
-void compile_shader(Shader *s);
 bool handle_Xevents(XEvent ev);
-void create_c_shader(Shader *s);
 bool handle_KeyPress(XKeyEvent ke);
-void create_screen_texture(GLuint ID);
-void create_vf_shaders(Shader *v, Shader *f);
-void checkCompileErrors(GLuint shader, char *type);
-Shader load_shader_code(const char *path, GLenum type);
 void mouse_moved(XMotionEvent e, int prev_x, int prev_y, int prev_time);
-struct buffer_id create_ssbo(void *data, size_t sizeof_data, size_t binding, GLenum usage);
 
-
-void swap_buffer(struct buffer_id *x, struct buffer_id *x0)
+void set_buffer_bind(ssbo_data *x, size_t binding)
 {
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, x->id);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, x0->binding, x->id);
-	glBindBuffer(GL_SHADER_STORAGE_BUFFER, x0->id);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, x->binding, x0->id);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, binding, x->id);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-	size_t tmp = x->binding;
-	x->binding = x0->binding;
-	x0->binding = tmp;
+	x->binding = binding;
+}
+
+void swap_buffer(ssbo_data *x0, ssbo_data *x1)
+{
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, x0->id);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, x1->binding, x0->id);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, x1->id);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, x0->binding, x1->id);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+	size_t tmp  = x0->binding;
+	x0->binding = x1->binding;
+	x1->binding = tmp;
 }
 
 void dispatch_set_bnd(int which, int b) 
 {
+	//printf("set_bnd: input binding = %ld, output binding = %ld\n", all_buffers.input.binding, all_buffers.output.binding);
 	glUseProgram(set_bnd_shader.ID);
 	glUniform1i(glGetUniformLocation(set_bnd_shader.ID, "which"), which);
 	glUniform1i(glGetUniformLocation(set_bnd_shader.ID, "d0"), b);
 	glDispatchCompute(N+2, 1, 1);
 	glMemoryBarrier(GL_ALL_BARRIER_BITS);
+	//swap_buffer(&all_buffers.output, &all_buffers.input);
 }
-void dispatch_diffuse(float dt)
-{
-	glUseProgram(diffuse_shader.ID);
 
-	glUniform1f(glGetUniformLocation(diffuse_shader.ID, "dt"), dt);
-	glUniform1f(glGetUniformLocation(diffuse_shader.ID, "diff"), DIFF);
-	glUniform1f(glGetUniformLocation(diffuse_shader.ID, "visc"), VISC);
-	for (int i = 0; i < 30; i++) {
-		glDispatchCompute(N, N, 1);
-		glMemoryBarrier(GL_ALL_BARRIER_BITS);
-
-		/*
-		read = input_buffer
-		write = output_buf
-
-		diffuse(N, 0, tmp, write_x, read_current_x, diff, dt);
-		diffuse(N, 1, tmp, write_u, read_current_u0, visc, dt);
-		diffuse(N, 2, tmp, write_v, read_current_v0, visc, dt);
-
-		tmp[IX(i, j)] = (read_current_x0[IX(i, j)] + a * 
-						(write[IX(i-1, j  )] + write[IX(i+1, j  )] + 
-						 write[IX(i  , j-1)] + write[IX(i  , j+1)])) / (1+4*a);
-		set_bnd(n, b, x);
-		swap(write with tmp)
-		*/
-		swap_buffer(&all_buffers.write, &all_buffers.tmp);
-		dispatch_set_bnd(0, 1);
-		dispatch_set_bnd(1, 2);
-		dispatch_set_bnd(2, 0);
-	}
-}
 void dispatch_add_source(float dt)
 {
 	glUseProgram(add_source_shader.ID);
@@ -159,7 +123,6 @@ void dispatch_add_source(float dt)
 	glDispatchCompute(N, N, 1);
 	glMemoryBarrier(GL_ALL_BARRIER_BITS);
 
-	swap_buffer(&all_buffers.read, &all_buffers.write);
 }
 void dispatch_advect(float dt, int which, int b) 
 {
@@ -173,36 +136,77 @@ void dispatch_advect(float dt, int which, int b)
 	dispatch_set_bnd(which, b);
 
 }
+void dispatch_lin_solve(int b, float a, float a0, unsigned int which, int iter)
+{
+	glUseProgram(lin_solve_shader.ID);
+	glUniform1f(glGetUniformLocation(lin_solve_shader.ID, "a"), a);
+	glUniform1f(glGetUniformLocation(lin_solve_shader.ID, "a0"), a0);
+	glUniform1ui(glGetUniformLocation(lin_solve_shader.ID, "which"), which);
+
+	ssbo_data *tmp, *out;
+	if (which == U) {
+		tmp = &all_buffers.tmp.u;
+		out = &all_buffers.output.u;
+	} else if (which == DENS) {
+		tmp = &all_buffers.tmp.dens;
+		out = &all_buffers.output.dens;
+	} else if (which == V) {
+		tmp = &all_buffers.tmp.v;
+		out = &all_buffers.output.v;
+	}
+	for (int i = 0; i < iter; i++) {
+		glUseProgram(lin_solve_shader.ID);
+		glDispatchCompute(N, N, 1);
+		glMemoryBarrier(GL_ALL_BARRIER_BITS);
+
+		swap_buffer(out, tmp);
+		//dispatch_set_bnd(which, b);
+	}
+
+}
+void dispatch_diffuse(float dt, bool w)
+{
+	float a = dt * DIFF * N * N;
+	if (w) dispatch_lin_solve(0, a, 1.0+4.0*a, DENS, 30);
+	else {
+		a = dt * VISC * N * N;
+		dispatch_lin_solve(1, a, 1+4*a, U, 30);
+		dispatch_lin_solve(2, a, 1+4*a, V, 30);
+	}
+}
 void dispatch_project(void)
 {
 	glUseProgram(project_s1_shader.ID);
 	glDispatchCompute(N, N, 1);
 	glMemoryBarrier(GL_ALL_BARRIER_BITS);
+	swap_buffer(&all_buffers.input.u, &all_buffers.output.u);
+	swap_buffer(&all_buffers.input.v, &all_buffers.output.v);
+
 	dispatch_set_bnd(0, 0);
 	dispatch_set_bnd(1, 0);
 
-	glUseProgram(project_shader.ID);
-	for (int i = 0; i < 30; i++) {
-		glDispatchCompute(N, N, 1);
-		glMemoryBarrier(GL_ALL_BARRIER_BITS);
-
-		swap_buffer(&all_buffers.tmp, &all_buffers.write);
-		dispatch_set_bnd(0, 0);
-	}
+	dispatch_lin_solve(0, 1, 4, U, 30);
+	swap_buffer(&all_buffers.input.u, &all_buffers.output.u);
+	swap_buffer(&all_buffers.input.v, &all_buffers.output.v);
 
 	glUseProgram(project_s2_shader.ID);
 	glDispatchCompute(N, N, 1);
 	glMemoryBarrier(GL_ALL_BARRIER_BITS);
+	swap_buffer(&all_buffers.input.u, &all_buffers.output.u);
+	swap_buffer(&all_buffers.input.v, &all_buffers.output.v);
+
 	dispatch_set_bnd(0, 1);
 	dispatch_set_bnd(1, 2);
 }
 
 int main(void) 
 {
+	printf("size = %ld\n", sizeof(float)*SIZE);
 	if (init()) {
 		fprintf(stderr, "Error: init failed\n");
 		return -1;
 	}
+	/*
 	if (init_shaders()) {
 		fprintf(stderr, "Error: init_shaders failed\n");
 		glXMakeCurrent(d, None, NULL);
@@ -211,18 +215,35 @@ int main(void)
 		XCloseDisplay(d);
 		return -1;
 	}
-	create_screen_texture(sv.ID);
+	 * remember to handle errors from load_all_shaders_from
+	 */
+	//load_all_shaders_from(PROG_DIR, ANY_SHADER_TYPE, shaders, sizeof(shaders)/sizeof(Shader));
+
+	sc = load_shader_from_name("compute.comp", 0);
+	sv = load_shader_from_name("test.vert", 0);
+	sf = load_shader_from_name("test.frag", 0);
+	create_c_shader(&sc, 0);
+	create_vf_shaders(&sv, &sf);
+	create_screen_texture(sv.ID, WIDTH, HEIGHT);
 
 	glUseProgram(sc.ID);
-	all_buffers.read = create_ssbo(&read_buf, sizeof(read_buf), 1, GL_DYNAMIC_DRAW);
-	all_buffers.write = create_ssbo(&write_buf, sizeof(write_buf), 2, GL_DYNAMIC_DRAW);
-	all_buffers.tmp = create_ssbo(&tmp_buf, sizeof(tmp_buf), 3, GL_DYNAMIC_DRAW);
-
+	all_buffers.input.dens = create_ssbo(1, GL_DYNAMIC_DRAW);
+	all_buffers.input.u = create_ssbo(2, GL_DYNAMIC_DRAW);
+	all_buffers.input.v = create_ssbo(3, GL_DYNAMIC_DRAW);
+	all_buffers.output.dens = create_ssbo(4, GL_DYNAMIC_DRAW);
+	all_buffers.output.u = create_ssbo(5, GL_DYNAMIC_DRAW);
+	all_buffers.output.v = create_ssbo(6, GL_DYNAMIC_DRAW);
+	all_buffers.tmp.dens = create_ssbo(7, GL_DYNAMIC_DRAW);
+	all_buffers.tmp.u = create_ssbo(8, GL_DYNAMIC_DRAW);
+	all_buffers.tmp.v = create_ssbo(9, GL_DYNAMIC_DRAW);
 
 	ns_t current_t , prev_t = now_ns();
 	
 	XEvent ev; 
 	bool quit = false;
+	all_buffers.input.dens.data[IX((N+2)/2, (N+2)/2)] = 10.0;
+	int frames = 0;
+	double elapsed = 0.0, now = 0.0, last = 0.0;
 	while (!quit) {
 		ns_t frame_start = now_ns();
 		while (XPending(d) > 0) {
@@ -233,31 +254,85 @@ int main(void)
 		current_t = now_ns();
 		float dt = (float)(current_t - prev_t) / 1e9f;
 		prev_t = current_t;
+		now = now_ns()/1e9f;
+		elapsed = now-last;
+		frames++;
+		if (elapsed >= 1.0) {
+			char title[256];
+			snprintf(title, sizeof(title), "fps: %f", frames/elapsed);
+			XStoreName(d, w, title);
+			frames = 0;
+			last = now;
+		}
 
-		glBindBuffer(GL_SHADER_STORAGE_BUFFER, all_buffers.write.id);
+		/*
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, all_buffers.input.dens.id);
 		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 
 						0, 
-						sizeof(*all_buffers.write_data), 
-						all_buffers.write_data);
+						sizeof(all_buffers.input.dens.data),
+						all_buffers.input.dens.data);
 
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, all_buffers.input.u.id);
+		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 
+						0, 
+						sizeof(all_buffers.input.u.data),
+						all_buffers.input.u.data);
+
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, all_buffers.input.v.id);
+		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 
+						0, 
+						sizeof(all_buffers.input.v.data),
+						all_buffers.input.v.data);
 		glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
 		dispatch_add_source(dt);
-		dispatch_diffuse(dt);
+		dispatch_diffuse(dt, 1);
+		dispatch_diffuse(dt, 0);
 		dispatch_project();
 		dispatch_advect(dt, 0, 1);
 		dispatch_advect(dt, 1, 2);
 		dispatch_project();
 
 		dispatch_advect(dt, 2, 0);
+		*/
 
-		//vel_step(N, input_buf.u, input_buf.v, output_buf.u, output_buf.v, VISC, dt);
-		//dens_step(N, input_buf.dens, output_buf.dens, input_buf.u, input_buf.v, DIFF, dt);
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, all_buffers.input.dens.id);
+		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 
+						0, 
+						sizeof(all_buffers.input.dens.data),
+						dens);
+
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, all_buffers.input.u.id);
+		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 
+						0, 
+						sizeof(all_buffers.input.u.data),
+						u);
+
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, all_buffers.input.v.id);
+		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 
+						0, 
+						sizeof(all_buffers.input.v.data),
+						v);
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+		vel_step(N, u, 
+					v, 
+					u_prev, 
+					v_prev, 
+					VISC, dt);
+		dens_step(N, dens, 
+					 dens_prev, 
+					 u, 
+					 v, 
+					 DIFF, dt);
 		
 		glUseProgram(sc.ID);
 
-
 		glDispatchCompute(N+2, N+2, 1);
 		glMemoryBarrier(GL_ALL_BARRIER_BITS);
+		memset(u_prev, 0, sizeof(u_prev));
+		memset(v_prev, 0, sizeof(v_prev));
+		memset(dens_prev, 0, sizeof(dens_prev));
 
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -267,18 +342,9 @@ int main(void)
 		renderQuad();
 
 		glXSwapBuffers(d, w);
-		memset(all_buffers.write_data->dens, 
-			   0, 
-			   sizeof(all_buffers.write_data->dens)
-			   );
-		memset(all_buffers.write_data->u, 
-			   0, 
-			   sizeof(all_buffers.write_data->u)
-			   );
-		memset(all_buffers.write_data->v, 
-			   0, 
-			   sizeof(all_buffers.write_data->v)
-			   );
+		//memset(all_buffers.input.dens.data, 0, sizeof(all_buffers.input.dens.data));
+		//memset(all_buffers.input.u.data, 0, sizeof(all_buffers.input.u.data));
+		//memset(all_buffers.input.v.data, 0, sizeof(all_buffers.input.v.data));
 
 		ns_t frame_end = now_ns();
 		ns_t frame_time = frame_end - frame_start;
@@ -290,14 +356,14 @@ int main(void)
 			nanosleep(&ts, NULL);
 		}
 	}
-
-	free(add_source_shader.code);
-	free(advect_shader.code);
-	free(diffuse_shader.code);
-	free(set_bnd_shader.code);
-	free(project_shader.code);
-	free(project_s1_shader.code);
-	free(project_s2_shader.code);
+	//TODO remember to free when loaded in
+	//free(add_source_shader.code);
+	//free(advect_shader.code);
+	//free(diffuse_shader.code);
+	//free(set_bnd_shader.code);
+	//free(project_shader.code);
+	//free(project_s1_shader.code);
+	//free(project_s2_shader.code);
 	free(sc.code);
 	free(sv.code);
 	free(sf.code);
@@ -306,6 +372,33 @@ int main(void)
 	XDestroyWindow(d, w);
 	XCloseDisplay(d);
 	return 0;
+}
+
+void mouse_moved(XMotionEvent e, int prev_x, int prev_y, int prev_time) 
+{
+	int x = e.x / (WIDTH / N);
+	int y = e.y / (HEIGHT / N);
+
+	int px = prev_x / (WIDTH / N);
+	int py = prev_y / (HEIGHT / N);
+	int dx = x - px;
+	int dy = y - py;
+	
+	int dt = e.time - prev_time;
+	if (dt <= 0) dt = 1;
+	
+	float speed = sqrtf(dx*dx + dy*dy) / (float)dt;
+	float force = speed * 200;
+
+	dens_prev[IX(x, y)] += force;
+	u_prev[IX(x, y)] += dx * speed * 40.0f;
+	v_prev[IX(x, y)] += dy * speed * 40.0f;
+	//dens_prev[IX((N+2)/2, (N+2)/2)] += 100.0;
+	//all_buffers.write_data->dens[IX(50, (N+2-50))] += 100.0;
+	//all_buffers.input.u.data[IX(x, (N+2-y))] += 1.0;
+	//all_buffers.input.v.data[IX(x, (N+2-y))] += 1.0;
+	//all_buffers.input.dens.data[IX(x, (N+2-y))] += force;
+	//printf("(x, y) = (%d, %d)\n", x, y);
 }
 
 bool handle_KeyPress(XKeyEvent ke) 
@@ -340,152 +433,7 @@ bool handle_Xevents(XEvent ev)
 	return should_quit;
 }
 
-ns_t now_ns(void) 
-{
-	struct timespec ts;
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return (ns_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
-}
 
-void checkCompileErrors(GLuint shader, char *type) 
-{
-	GLint success = 0;
-	GLchar infoLog[1024] = "";
-	if (strcmp(type, "PROGRAM") == 0) {
-		glGetProgramiv(shader, GL_LINK_STATUS, &success);
-		if (!success) {
-			glGetProgramInfoLog(shader, 1024, NULL, infoLog);
-			fprintf(stderr, "Error: Program linking err: \n%s\n", infoLog);
-		}
-	} else {
-		glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
-		if (success == GL_FALSE) {
-			glGetShaderInfoLog(shader, 1024, NULL, infoLog);
-			fprintf(stderr, "Error: Shader Compile err: \n%s\n", infoLog);
-		}
-	}
-}
-
-void mouse_moved(XMotionEvent e, int prev_x, int prev_y, int prev_time) 
-{
-	int x = e.x / (WIDTH / N);
-	int y = e.y / (HEIGHT / N);
-
-	int px = prev_x / (WIDTH / N);
-	int py = prev_y / (HEIGHT / N);
-	int dx = x - px;
-	int dy = y - py;
-	
-	int dt = e.time - prev_time;
-	if (dt <= 0) dt = 1;
-	
-	float speed = sqrtf(dx*dx + dy*dy) / (float)dt;
-	float force = speed * 200;
-
-	all_buffers.write_data->dens[IX(x, y)] += force;
-	all_buffers.write_data->u[IX(x, y)] += dx * speed * 15.0f;
-	all_buffers.write_data->v[IX(x, y)] += dy * speed * 15.0f;
-	//u[IX(x, (N+2-y))] = 1.0;
-}
-
-Shader load_shader_code(const char *path, GLenum type)
-{
-	Shader return_shader = { .type = type, .loaded = false };
-	FILE *shader_file;
-
-	shader_file = fopen(path, "r");
-	if (shader_file == NULL) {
-		fprintf(stderr, "Error: load_shader_code failed to open shader file at %s\n", path);
-		return return_shader;
-	}
-
-	fseek(shader_file, 0, SEEK_END);
-	size_t size = ftell(shader_file);
-	fseek(shader_file, 0, SEEK_SET);
-
-	return_shader.code_size = size;
-	return_shader.code = calloc(size, sizeof(char));
-	if (return_shader.code == NULL) {
-		fprintf(stderr, "Error: load_shader_code failed to calloc return_shader.code, size %ld\n", size);
-		fclose(shader_file);
-		return return_shader;
-	}
-
-	fread(return_shader.code, 1, size, shader_file);
-
-	return_shader.loaded = true;
-
-	fclose(shader_file);
-	return return_shader;
-}
-
-void create_c_shader(Shader *s) 
-{
-	compile_shader(s);
-	checkCompileErrors(s->sID, "COMPUTE");
-
-	s->ID = glCreateProgram();
-	glAttachShader(s->ID, s->sID);
-	glLinkProgram(s->ID);
-	checkCompileErrors(s->ID, "PROGRAM");
-	glDeleteShader(s->sID);
-}
-
-void create_vf_shaders(Shader *v, Shader *f)
-{
-	compile_shader(v);
-	checkCompileErrors(v->sID, "VERTEX");
-	compile_shader(f);
-	checkCompileErrors(f->sID, "FRAGMENT");
-
-	unsigned int ID = f->ID = v->ID = glCreateProgram();
-	glAttachShader(ID, f->sID);
-	glAttachShader(ID, v->sID);
-	glLinkProgram(ID);
-	checkCompileErrors(ID, "PROGRAM");
-
-	glDeleteShader(f->sID);
-	glDeleteShader(v->sID);
-}
-
-void compile_shader(Shader *s)
-{
-	s->sID = glCreateShader(s->type);
-	glShaderSource(s->sID, 1, (const char *const*)&s->code, NULL);
-	glCompileShader(s->sID);
-}
-GLXFBConfig create_fb_conf(const int *attribList)
-{
-	int fb_c;
-	GLXFBConfig *fbc = glXChooseFBConfig(d, DefaultScreen(d), attribList, &fb_c);
-
-	int best = -1, worst = -1, best_sample = -1;
-	int best_samples = -1, worst_samples = 999;
-	for (int i = 0; i < fb_c; i++) {
-		XVisualInfo *vi = glXGetVisualFromFBConfig(d, fbc[i]);
-		if (vi) {
-			int sample_buffers, samples;
-			glXGetFBConfigAttrib(d, fbc[i], GLX_SAMPLE_BUFFERS, &sample_buffers);
-			glXGetFBConfigAttrib(d, fbc[i], GLX_SAMPLES, &samples);
-
-			if (best < 0 || sample_buffers) {
-				best = samples;
-				best_sample = i;
-			}
-			if (sample_buffers && samples > best_samples) {
-				best_samples = samples;
-				best_sample = i;
-			}
-			if (worst < 0 || !sample_buffers) {
-				worst = i;
-			}
-		}
-		XFree(vi);
-	}
-	GLXFBConfig bfb = fbc[best_sample >= 0 ? best_sample : best];
-	XFree(fbc);
-	return bfb;
-}
 int init(void)
 {
 	d = XOpenDisplay(NULL);
@@ -505,7 +453,7 @@ int init(void)
 		GLX_DEPTH_SIZE, 24,
 		None
 	};
-	GLXFBConfig fbc = create_fb_conf(fb_att);
+	GLXFBConfig fbc = create_fb_conf(d, fb_att);
 
 	XVisualInfo *vi = glXGetVisualFromFBConfig(d, fbc);
 	if (vi == NULL) {
@@ -547,6 +495,7 @@ int init(void)
 	XMapWindow(d, w);
 
 	glXCreateContextAttribsARB = (glXCreateContextAttribsARBProc)glXGetProcAddress((const GLubyte *)"glXCreateContextAttribsARB");
+
 	int catt[] = {
 		GLX_CONTEXT_MAJOR_VERSION_ARB, 4,
 		GLX_CONTEXT_MINOR_VERSION_ARB, 6,
@@ -554,11 +503,10 @@ int init(void)
 		GLX_CONTEXT_FLAGS_ARB, GLX_CONTEXT_DEBUG_BIT_ARB,
 		None
 	};
-	glc = glXCreateContextAttribsARB(d, fbc, NULL, True, catt);  //glXCreateContext(d, vi, NULL, GL_TRUE);
+	glc = glXCreateContextAttribsARB(d, fbc, NULL, True, catt);
 	glXMakeCurrent(d, w, glc);
 	glEnable(GL_DEPTH_TEST);
-
-
+	
 	int glew_error = glewInit();
 	if (glew_error) {
 		fprintf(stderr, "Error: glewInit failed returned: %d, %s\n", glew_error, glewGetErrorString(glew_error));
@@ -579,202 +527,8 @@ int init(void)
 	return 0;
 }
 
-unsigned int quadVAO = 0;
-unsigned int quadVBO;
-void renderQuad(void)
-{
-	if (quadVAO == 0) {
-		float quadVertices[] = {
-			-1.0f,  1.0f, 0.0f, 0.0f, 1.0f,
-			-1.0f, -1.0f, 0.0f, 0.0f, 0.0f,
-		 	 1.0f,  1.0f, 0.0f, 1.0f, 1.0f,
-		 	 1.0f, -1.0f, 0.0f, 1.0f, 0.0f
-		};
-
-		glGenVertexArrays(1, &quadVAO);
-		glGenBuffers(1, &quadVBO);
-
-		glBindVertexArray(quadVAO);
-		glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
-		glBufferData(GL_ARRAY_BUFFER, sizeof(quadVertices), &quadVertices, GL_STATIC_DRAW);
-
-		glEnableVertexAttribArray(0);
-		glVertexAttribPointer(0, 
-							  3, 
-							  GL_FLOAT, 
-							  GL_FALSE, 
-							  5 * sizeof(float), 
-							  (void*)0);
-
-		glEnableVertexAttribArray(1);
-		glVertexAttribPointer(1, 
-							  2, 
-							  GL_FLOAT, 
-							  GL_FALSE, 
-							  5 * sizeof(float), 
-							  (void*)(3*sizeof(float)));
-	}
-	glBindVertexArray(quadVAO);
-	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-	glBindVertexArray(0);
-}
-
-void create_screen_texture(GLuint ID)
-{
-	glUseProgram(ID);
-	glUniform1i(glGetUniformLocation(ID, "tex"), 0);
-
-	glGenTextures(1, &screen_texture);
-	glBindTexture(GL_TEXTURE_2D, screen_texture);
-	glActiveTexture(GL_TEXTURE0);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, WIDTH, HEIGHT, 0, GL_RGBA, GL_FLOAT, NULL);
-
-	glBindImageTexture(0, screen_texture, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
-}
-
-struct buffer_id create_ssbo(void *data, size_t sizeof_data, size_t binding, GLenum usage) 
-{
-	struct buffer_id ssbo = { .binding = binding };
-	glGenBuffers(1, &ssbo.id);
-	glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo.id);
-	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof_data, data, usage);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, ssbo.binding, ssbo.id);
-	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-	return ssbo;
-}
-
-// TODO refactor this it sucks
 int init_shaders(void) 
 {
-	char path0[] = "/home/emil/Programming/c/screensaver/fromWork/compute.comp";
-	char path_ass[] = "/home/emil/Programming/c/screensaver/fromWork/add_source.comp";
-	char path_ds[] = "/home/emil/Programming/c/screensaver/fromWork/diffuse.comp";
-	char path_av[] = "/home/emil/Programming/c/screensaver/fromWork/advect.comp";
-	char path_sb[] = "/home/emil/Programming/c/screensaver/fromWork/set_bnd.comp";
-	char path_p[] = "/home/emil/Programming/c/screensaver/fromWork/project.comp";
-	char path_p1[] = "/home/emil/Programming/c/screensaver/fromWork/project_step_1.comp";
-	char path_p2[] = "/home/emil/Programming/c/screensaver/fromWork/project_step_2.comp";
-	char path1[] = "/home/emil/Programming/c/screensaver/fromWork/test.vert";
-	char path2[] = "/home/emil/Programming/c/screensaver/fromWork/test.frag";
-	diffuse_shader = load_shader_code(path_ds, GL_COMPUTE_SHADER);
-	if (!diffuse_shader.loaded) {
-		fprintf(stderr, "Error: load_shader_code failed\n");
-		return -1;
-	}
-	add_source_shader = load_shader_code(path_ass, GL_COMPUTE_SHADER);
-	if (!add_source_shader.loaded) {
-		fprintf(stderr, "Error: load_shader_code failed\n");
-		free(diffuse_shader.code);
-		return -1;
-	}
-	set_bnd_shader = load_shader_code(path_sb, GL_COMPUTE_SHADER);
-	if (!set_bnd_shader.loaded) {
-		fprintf(stderr, "Error: load_shader_code failed\n");
-		free(diffuse_shader.code);
-		free(add_source_shader.code);
-		return -1;
-	}
-	advect_shader = load_shader_code(path_av, GL_COMPUTE_SHADER);
-	if (!advect_shader.loaded) {
-		fprintf(stderr, "Error: load_shader_code failed\n");
-		free(diffuse_shader.code);
-		free(add_source_shader.code);
-		free(set_bnd_shader.code);
-		return -1;
-	}
-	sc = load_shader_code(path0, GL_COMPUTE_SHADER);
-	if (!sc.loaded) {
-		fprintf(stderr, "Error: load_shader_code failed\n");
-		free(diffuse_shader.code);
-		free(add_source_shader.code);
-		free(set_bnd_shader.code);
-		free(advect_shader.code);
-		return -1;
-	}
-	sv = load_shader_code(path1, GL_VERTEX_SHADER);
-	if (!sv.loaded) {
-		fprintf(stderr, "Error: load_shader_code failed\n");
-		free(sc.code);
-		free(diffuse_shader.code);
-		free(add_source_shader.code);
-		free(set_bnd_shader.code);
-		free(advect_shader.code);
-		free(sc.code);
-		return -1;
-	}
-	sf = load_shader_code(path2, GL_FRAGMENT_SHADER);
-	if (!sf.loaded) {
-		fprintf(stderr, "Error: load_shader_code failed\n");
-		free(sv.code);
-		free(sc.code);
-		free(diffuse_shader.code);
-		free(add_source_shader.code);
-		free(set_bnd_shader.code);
-		free(advect_shader.code);
-		return -1;
-	}
-	project_shader = load_shader_code(path_p, GL_COMPUTE_SHADER);
-	if (!project_shader.loaded) {
-		fprintf(stderr, "Error: load_shader_code failed\n");
-		free(sv.code);
-		free(sf.code);
-		free(sc.code);
-		free(diffuse_shader.code);
-		free(add_source_shader.code);
-		free(set_bnd_shader.code);
-		free(advect_shader.code);
-		return -1;
-	}
-	project_s1_shader = load_shader_code(path_p1, GL_COMPUTE_SHADER);
-	if (!project_s1_shader.loaded) {
-		fprintf(stderr, "Error: load_shader_code failed\n");
-		free(sv.code);
-		free(sf.code);
-		free(sc.code);
-		free(diffuse_shader.code);
-		free(add_source_shader.code);
-		free(set_bnd_shader.code);
-		free(advect_shader.code);
-		free(project_shader.code);
-		return -1;
-	}
-	project_s2_shader = load_shader_code(path_p2, GL_COMPUTE_SHADER);
-	if (!project_s2_shader.loaded) {
-		fprintf(stderr, "Error: load_shader_code failed\n");
-		free(sv.code);
-		free(sf.code);
-		free(sc.code);
-		free(diffuse_shader.code);
-		free(add_source_shader.code);
-		free(set_bnd_shader.code);
-		free(advect_shader.code);
-		free(project_shader.code);
-		free(project_s1_shader.code);
-		return -1;
-	}
-
-	printf("sc\n");
-	create_c_shader(&sc);
-	printf("diffuse\n");
-	create_c_shader(&diffuse_shader);
-	printf("add_source\n");
-	create_c_shader(&add_source_shader);
-	printf("set_bnd\n");
-	create_c_shader(&set_bnd_shader);
-	printf("advect\n");
-	create_c_shader(&advect_shader);
-	printf("project\n");
-	create_c_shader(&project_shader);
-	printf("project_step_1\n");
-	create_c_shader(&project_s1_shader);
-	printf("project_step_2\n");
-	create_c_shader(&project_s2_shader);
-	printf("sv & sf\n");
-	create_vf_shaders(&sv, &sf);
 
 	return 0;
 }

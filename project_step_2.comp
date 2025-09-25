@@ -1,24 +1,36 @@
 #version 460 core
-#define N 250
+#define N 100
 #define SIZE ((N+2) * (N+2))
 #define IX(x, y) ((x)+(N+2)*(y))
 
 layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
-layout (std430, binding = 1) buffer input_buf { 
-	float dens[SIZE]; 
-	float u[SIZE]; 
-	float v[SIZE];
+layout (std430, binding = 1) buffer input_dens_buf { 
+	float dens_in[SIZE]; 
 };
-layout (std430, binding = 2) buffer output_buf { 
-	float dens_prev[SIZE]; 
-	float u_prev[SIZE]; 
-	float v_prev[SIZE];
+layout (std430, binding = 2) buffer input_u_buf { 
+	float u_in[SIZE]; 
 };
-layout (std430, binding = 3) buffer tmp_buf { 
-	float tmp_dens[SIZE]; 
-	float tmp_u[SIZE]; 
-	float tmp_v[SIZE]; 
+layout (std430, binding = 3) buffer input_v_buf { 
+	float v_in[SIZE];
+};
+layout (std430, binding = 4) buffer output_dens_buf { 
+	float dens_out[SIZE]; 
+};
+layout (std430, binding = 5) buffer output_u_buf { 
+	float u_out[SIZE]; 
+};
+layout (std430, binding = 6) buffer output_v_buf { 
+	float v_out[SIZE];
+};
+layout (std430, binding = 7) buffer tmp_dens_buf { 
+	float dens_tmp[SIZE]; 
+};
+layout (std430, binding = 8) buffer tmp_u_buf { 
+	float u_tmp[SIZE]; 
+};
+layout (std430, binding = 9) buffer tmp_v_buf { 
+	float v_tmp[SIZE]; 
 };
 uniform float dt;
 uniform float diff;
@@ -31,10 +43,11 @@ void main()
 	uint x = gl_GlobalInvocationID.x+1;
 	uint y = gl_GlobalInvocationID.y+1;
 
-	u[IX(x, y)] -= 0.5f * (u_prev[IX(x+1, y  )] - u_prev[IX(x-1, y  )])/h;
-	v[IX(x, y)] -= 0.5f * (u_prev[IX(x  , y+1)] - u_prev[IX(x  , y-1)])/h;
+	u_out[IX(x, y)] -= 0.5f * (u_in[IX(x+1, y  )] - u_in[IX(x-1, y  )])/h;
+	v_out[IX(x, y)] -= 0.5f * (u_in[IX(x  , y+1)] - u_in[IX(x  , y-1)])/h;
 
 	//set_bnd(n, 1, u); 
 	//set_bnd(n, 2, v);
 }
+
 

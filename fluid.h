@@ -1,7 +1,7 @@
 #ifndef FLUID_H
 #define FLUID_H
 
-#define N 250
+#define N 100
 #define SIZE ((N+2) * (N+2))
 
 #define IX(x, y) ((x)+(N+2)*(y))

@@ -32,19 +32,32 @@ layout (std430, binding = 8) buffer tmp_u_buf {
 layout (std430, binding = 9) buffer tmp_v_buf { 
 	float v_tmp[SIZE]; 
 };
-uniform float dt;
-uniform float diff;
-uniform float visc;
+//uniform float dt;
+//uniform float diff;
+//uniform float visc;
+uniform float a;
+uniform float a0;
+uniform uint which;
 
 void main()
 {
 	uint x = gl_GlobalInvocationID.x+1;
 	uint y = gl_GlobalInvocationID.y+1;
 	uint i = x + (N+2) * y;
-    float h = 1.0f/N;
 
-	u_out[i] = (u_tmp[i] +
+	if (which == 0) {
+	u_tmp[i] = (u_out[i] + a0 *
 				(u_in[IX(x-1, y  )] + u_in[IX(x+1, y  )] + 
-				 u_in[IX(x  , y-1)] + u_in[IX(x  , y+1)])) / 4;
+				 u_in[IX(x  , y-1)] + u_in[IX(x  , y+1)])) / a;
+	} else if (which == 1) {
+	dens_tmp[i] = (dens_out[i] + a0 *
+				(dens_in[IX(x-1, y  )] + dens_in[IX(x+1, y  )] + 
+				 dens_in[IX(x  , y-1)] + dens_in[IX(x  , y+1)])) / a;
+	} else if (which == 2) {
+	v_tmp[i] = (v_out[i] + a0 *
+				(v_in[IX(x-1, y  )] + v_in[IX(x+1, y  )] + 
+				 v_in[IX(x  , y-1)] + v_in[IX(x  , y+1)])) / a;
+	}
+	//swap_buffer tmp with out
 }
 

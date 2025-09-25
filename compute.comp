@@ -1,38 +1,58 @@
 #version 460 core
-#define N 250
+#define N 100
 #define SIZE ((N+2) * (N+2))
 
 layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
 layout(rgba32f, binding = 0) uniform image2D outimg;
-layout (std430, binding = 1) buffer input_buf { 
-	float dens[SIZE]; 
-	float u[SIZE]; 
-	float v[SIZE];
+layout (std430, binding = 1) buffer input_dens_buf { 
+	float dens_in[SIZE]; 
 };
-layout (std430, binding = 2) buffer out_buf { 
-	float dens_prev[SIZE]; 
-	float u_prev[SIZE]; 
-	float v_prev[SIZE];
+layout (std430, binding = 2) buffer input_u_buf { 
+	float u_in[SIZE]; 
+};
+layout (std430, binding = 3) buffer input_v_buf { 
+	float v_in[SIZE];
+};
+layout (std430, binding = 4) buffer output_dens_buf { 
+	float dens_out[SIZE]; 
+};
+layout (std430, binding = 5) buffer output_u_buf { 
+	float u_out[SIZE]; 
+};
+layout (std430, binding = 6) buffer output_v_buf { 
+	float v_out[SIZE];
+};
+layout (std430, binding = 7) buffer tmp_dens_buf { 
+	float dens_tmp[SIZE]; 
+};
+layout (std430, binding = 8) buffer tmp_u_buf { 
+	float u_tmp[SIZE]; 
+};
+layout (std430, binding = 9) buffer tmp_v_buf { 
+	float v_tmp[SIZE]; 
 };
 //uniform float dt;
-uint i = (gl_GlobalInvocationID.x+1) + (N+2) * (N+2-(gl_GlobalInvocationID.y)+1);
 
 void main()
 {
+	uint i = (gl_GlobalInvocationID.x+1) + (N+2) * (((N+2)-gl_GlobalInvocationID.y)+1);
 	ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
 	vec4 val = vec4(0.0,0.0,0.0,1.0);
 
-	val.x = float(pos.x)/(gl_NumWorkGroups.x) * dens[i];
-	val.y = float(pos.y)/(gl_NumWorkGroups.y) * dens[i];
-	val.z = dens[i];
+	val.r = float(pos.x)/(gl_NumWorkGroups.x) * dens_in[i];
+	val.b = float(pos.y)/(gl_NumWorkGroups.y) * dens_in[i];
+	//val.g = float(pos.y)/(gl_NumWorkGroups.y) * dens_in[i];
 	//val.x = ;
 	//val.y = float(pos.y)/(gl_NumWorkGroups.y);
 
 	imageStore(outimg, pos, val);
-	dens_prev[i] = 0.0;
-	u_prev[i] = 0.0;
-	v_prev[i] = 0.0;
+	//dens_prev[i] = 0.0;
+	//u_prev[i] = 0.0;
+	//v_prev[i] = 0.0;
+	//tmp_dens[i] = 0.0;
+	//tmp_u[i] = 0.0;
+	//tmp_v[i] = 0.0;
 }
 
 
