@@ -1,8 +1,11 @@
 #include "util.h"
+#include "gpu.h"
+#include <stdio.h>
 
 unsigned int screen_texture;
 unsigned int quadVAO = 0;
 unsigned int quadVBO;
+// https://learnopengl.com/Guest-Articles/2022/Compute-Shaders/Introduction
 void renderQuad(void)
 {
 	if (quadVAO == 0) {
@@ -89,7 +92,7 @@ GLenum get_shader_type_from(const char *file)
 Shader load_shader_from_name(const char *name, GLenum type)
 {
 	struct dirent *de;
-	char path[512] = PROG_DIR;
+	char path[512] = SHADER_DIR;
 	Shader ret = { .loaded = false };
 
 	DIR *d = opendir(path);
@@ -101,7 +104,7 @@ Shader load_shader_from_name(const char *name, GLenum type)
 
 	while ( (de = readdir(d)) ) {
 		if (strncmp(de->d_name, name, 256) == 0) {
-			printf("found file with name %s\n", de->d_name);
+			fprintf(stdout, "Info: found shader file with name %s in %s\n", de->d_name, path);
 			strncpy(ret.file_name, de->d_name, 256);
 			strncat(path, ret.file_name, 256);
 			break;
@@ -130,14 +133,17 @@ Shader load_and_compile_shader_from(const char *name, GLenum type)
 		return ret;
 	}
 
-	compile_shader(&ret);
+	if (ret.type == GL_COMPUTE_SHADER) create_c_shader(&ret, 0);
+	else fprintf(stderr, "Info: load_and_compile_shader_from: only supports compute shaders. "
+						 "shader with name \"%s\" not compiled\n", name);
 	return ret;
 }
+// returns the amount of textures added to save_to. 
 // if of_type == 0 then load all vertex, fragment and compute shaders found. 
 int load_all_shaders_from(const char *dir, GLenum of_type, Shader *save_to, size_t len)
 {
 	struct dirent *de;
-	char path[512] = PROG_DIR;
+	char path[512] = SHADER_DIR;
 
 	DIR *d = opendir(path);
 	if (!d) {
@@ -151,15 +157,16 @@ int load_all_shaders_from(const char *dir, GLenum of_type, Shader *save_to, size
 		if ((file_type == of_type && of_type != 0) || (of_type == 0 && file_type != 0)) {
 			save_to[i].type = file_type;
 			strncpy(save_to[i].file_name, de->d_name, 256);
+			//fprintf(stdout, "Info: load_all_shaders_from: found \"%s\" at \"%s\"\n", de->d_name, path);
 			strncat(path, save_to[i].file_name, 256);
 			save_to[i].code = load_shader_code(path);
 			if (!save_to[i].code) goto err_n_out;
-			strncpy(path, "", 512);
+			strncpy(path, SHADER_DIR, 512);
 			i++;
 		} 
 	}
 	closedir(d);
-	return 0;
+	return i;
 err_n_out:
 		fprintf(stderr, "Error: load_all_shaders_from: load_shader_code(%s) returned NULL\n", path);
 		for (; i >= 0; i--) {
@@ -175,6 +182,8 @@ Shader *get_shader_from_name(Shader *look_in, size_t len, const char *look_for)
 		if (strncmp(look_in[i].file_name, look_for, strlen(look_for)) == 0) 
 			return &look_in[i];
 	}
+	fprintf(stdout, "Warning: get_shader_from_name(%s) didnt find any shaders\n", 
+												   look_for);
 	return NULL;
 }
 
@@ -185,23 +194,31 @@ ns_t now_ns(void)
 	return (ns_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
-void checkCompileErrors(GLuint shader, char *type) 
+int checkCompileErrors(GLuint ID, GLenum pname) 
 {
 	GLint success = 0;
 	GLchar infoLog[1024] = "";
-	if (strcmp(type, "PROGRAM") == 0) {
-		glGetProgramiv(shader, GL_LINK_STATUS, &success);
+	if (pname == GL_LINK_STATUS) {
+		glGetProgramiv(ID, pname, &success);
 		if (!success) {
-			glGetProgramInfoLog(shader, 1024, NULL, infoLog);
-			fprintf(stderr, "Error: Program linking err: \n%s\n", infoLog);
+			glGetProgramInfoLog(ID, 1024, NULL, infoLog);
+			fprintf(stderr, "Error: Program Linking: \n%s\n", 
+													infoLog);
+			return -1;
+		}
+	} else if (pname == GL_COMPILE_STATUS) {
+		glGetShaderiv(ID, pname, &success);
+		if (!success) {
+			glGetShaderInfoLog(ID, 1024, NULL, infoLog);
+			fprintf(stderr, "Error: Shader Compile: \n%s\n", 
+													infoLog);
+			return -1;
 		}
 	} else {
-		glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
-		if (success == GL_FALSE) {
-			glGetShaderInfoLog(shader, 1024, NULL, infoLog);
-			fprintf(stderr, "Error: Shader Compile err: \n%s\n", infoLog);
-		}
+		fprintf(stderr, "Warning: checkCompileErrors: pname not supported\n");
+		return -1;
 	}
+	return 0;
 }
 
 char *load_shader_code(const char *path)
@@ -231,41 +248,65 @@ char *load_shader_code(const char *path)
 	return code;
 }
 
-void create_c_shader(Shader *s, GLuint ID) 
+int create_c_shader(Shader *s, GLuint ID) 
 {
-	printf("create_c_shader: %s\n", s->file_name);
-	compile_shader(s);
+	if (s->type != GL_COMPUTE_SHADER) {
+		fprintf(stderr, "Warning: create_c_shader: \"%s\" is not compute shader\n",
+													s->file_name);
+		return 0;
+	}
+	if (compile_shader(s)) {
+		fprintf(stderr, "Error: create_c_shader: Failed to compile \"%s\"\n",
+																s->file_name);
+		return -1;
+	}
 
 	s->ID = ID > 0 ? ID : glCreateProgram();
 	glAttachShader(s->ID, s->sID);
 	glLinkProgram(s->ID);
-	checkCompileErrors(s->ID, "PROGRAM");
+	if (checkCompileErrors(s->ID, GL_LINK_STATUS)) {
+		fprintf(stderr, "Error: create_c_shader: Failed to link \"%s\" to %d\n",
+														s->file_name, s->ID);
+		return -1;
+	}
 	glDeleteShader(s->sID);
+	return 0;
 }
 
-void create_vf_shaders(Shader *v, Shader *f)
+int create_vf_shaders(Shader *v, Shader *f)
 {
-	printf("create_vf_shader: %s, %s\n", v->file_name, f->file_name);
-	compile_shader(v);
-	compile_shader(f);
+	if (compile_shader(v)) {
+		fprintf(stderr, "Error: create_vf_shaders: Failed to compile \"%s\"",
+																v->file_name);
+		return -1;
+	}
+	if (compile_shader(f)) {
+		fprintf(stderr, "Error: create_vf_shaders: Failed to compile \"%s\"",
+																f->file_name);
+		return -1;
+	}
 
 	unsigned int ID = f->ID = v->ID = glCreateProgram();
 	glAttachShader(ID, f->sID);
 	glAttachShader(ID, v->sID);
 	glLinkProgram(ID);
-	checkCompileErrors(ID, "PROGRAM");
+	if (checkCompileErrors(ID, GL_LINK_STATUS)) {
+		fprintf(stderr, "Error: Failed to link vertex/fragment shader to %d\n",
+																		 ID);
+		return -1;
+	}
 
 	glDeleteShader(f->sID);
 	glDeleteShader(v->sID);
+	return 0;
 }
 
-void compile_shader(Shader *s)
+int compile_shader(Shader *s)
 {
 	s->sID = glCreateShader(s->type);
 	glShaderSource(s->sID, 1, (const char *const*)&s->code, NULL);
 	glCompileShader(s->sID);
-	checkCompileErrors(s->sID, (s->type == GL_COMPUTE_SHADER) ? "COMPUTE" : 
-							   (s->type == GL_VERTEX_SHADER)  ? "VERTEX"  : "FRAGMENT");
+	return checkCompileErrors(s->sID, GL_COMPILE_STATUS);
 }
 
 GLXFBConfig create_fb_conf(Display *d, const int *attribList)

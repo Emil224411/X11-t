@@ -1,0 +1,47 @@
+#version 460 core
+
+layout (local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(rgba32f, binding = 0) uniform image2D outimg;
+layout (std430, binding = 1) buffer input_dens_buf { 
+	float dens_in[]; 
+};
+layout (std430, binding = 2) buffer input_u_buf { 
+	float u_in[]; 
+};
+layout (std430, binding = 3) buffer input_v_buf { 
+	float v_in[];
+};
+layout (std430, binding = 4) buffer output_dens_buf { 
+	float dens_out[]; 
+};
+layout (std430, binding = 5) buffer output_u_buf { 
+	float u_out[]; 
+};
+layout (std430, binding = 6) buffer output_v_buf { 
+	float v_out[];
+};
+layout (std430, binding = 7) buffer tmp_dens_buf { 
+	float dens_tmp[]; 
+};
+layout (std430, binding = 8) buffer tmp_u_buf { 
+	float u_tmp[]; 
+};
+layout (std430, binding = 9) buffer tmp_v_buf { 
+	float v_tmp[];
+};
+uniform int n;
+uniform int v;
+
+void main()
+{
+	uint i = gl_GlobalInvocationID.x + (n+2) * ((n+2)-gl_GlobalInvocationID.y);
+	ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+	vec4 val = vec4(dens_out[i], 0.0, 0.0, 1.0);
+
+	if (v != 0) val += abs(u_out[i]+v_out[i]);
+
+	imageStore(outimg, pos, val);
+}
+
+

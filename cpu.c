@@ -1,4 +1,4 @@
-#include "fluid.h"
+#include "cpu.h"
 
 void add_source(int n, float *to, float *from, float dt) 
 {
@@ -27,7 +27,7 @@ void diffuse(int n, int b, float *x, float *x0, float diff, float dt)
 {
     float a = dt * diff * n * n;
 
-    for (int k = 0; k < 20; k++) {
+    for (int k = 0; k < 40; k++) {
         for (int i = 1; i <= n; i++) for (int j = 1; j <= n; j++) {
 			x[IX(i, j)] = (x0[IX(i, j)] + a * 
 							(x[IX(i-1, j  )] + x[IX(i+1, j  )] + 
@@ -60,7 +60,7 @@ void advect(int n, int b, float *d, float *d0, float *u, float *v, float dt)
                           s1 * (t0 * d0[IX(i1, j0)] + t1 * d0[IX(i1, j1)]);
         }
     }
-    set_bnd(n, b, d);
+    //set_bnd(n, b, d);
 }
 
 void project(int n, float *u, float *v, float *p, float *div) 
@@ -78,7 +78,7 @@ void project(int n, float *u, float *v, float *p, float *div)
     set_bnd(n, 0, div); 
 	set_bnd(n, 0,   p);
 
-    for (int k = 0; k < 20; k++) {
+    for (int k = 0; k < 40; k++) {
         for (int i = 1; i <= n; i++) {
 			for (int j = 1; j <= n; j++) {
             	p[IX(i, j)] = (
@@ -100,31 +100,31 @@ void project(int n, float *u, float *v, float *p, float *div)
 
 void dens_step(int n, float *x, float *x0, float *u, float *v, float diff, float dt) 
 {
-    add_source(N, x, x0, dt);
+    add_source(n, x, x0, dt);
     SWAP(x0, x); 
-	diffuse(N, 0, x, x0, diff, dt);
+	diffuse(n, 0, x, x0, diff, dt);
     SWAP(x0, x); 
-	advect (N, 0, x, x0, u, v, dt);
+	advect (n, 0, x, x0, u, v, dt);
 }
 
-//vel_step (N, u, v, u_prev, v_prev, VISC, dt);
+//vel_step (n, u, v, u_prev, v_prev, VISC, dt);
 void vel_step(int n, float *u, float *v, float *u0, float *v0, float visc, float dt) 
 {
-    add_source(N, u, u0, dt); 
-	add_source(N, v, v0, dt);
+    add_source(n, u, u0, dt); 
+	add_source(n, v, v0, dt);
 
     SWAP(u0, u); 
-	diffuse(N, 1, u, u0, visc, dt);
+	diffuse(n, 1, u, u0, visc, dt);
     SWAP(v0, v); 
-	diffuse(N, 2, v, v0, visc, dt);
+	diffuse(n, 2, v, v0, visc, dt);
 
-    project(N, u, v, u0, v0);
+    project(n, u, v, u0, v0);
 
     SWAP(u0, u); 
-    advect(N, 1, u, u0, u0, v0, dt); 
+    advect(n, 1, u, u0, u0, v0, dt); 
 	SWAP(v0, v);
-	advect(N, 2, v, v0, u0, v0, dt);
+	advect(n, 2, v, v0, u0, v0, dt);
 	
-    project(N, u, v, u0, v0);
+    project(n, u, v, u0, v0);
 }
 

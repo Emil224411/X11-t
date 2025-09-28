@@ -1,21 +1,28 @@
 CC = gcc
-LIBS = -lm -lX11 -lGLEW -lGL -lGLU
 
-CFLAGS   = -g -pedantic -Wall -O0
-#CFLAGS   = -pedantic -Wall -Wno-deprecated-declarations -Os
+OBJDIR = obj
+
+FREETYPELIBS = -lfontconfig -lXft
+FREETYPEINC = /usr/include/freetype2
+
+LIBS = -lm -lX11 -lGLEW -lGL -lGLU ${FREETYPELIBS}
+INCS = -I${FREETYPEINC}
+
+#CFLAGS   = -g -pedantic -Wall -O0 ${INCS}
+CFLAGS   = -pedantic -Wall -Wno-deprecated-declarations -Ofast
 LDFLAGS  = ${LIBS}
 
-DEFINES = -DPROG_DIR=\"$(abspath .)/\"
+DEFINES = -DSHADER_DIR=\"$(abspath .)/shaders/\"
 
-SRC = main.c fluid.c util.c
-OBJ = ${SRC:.c=.o}
+SRC = main.c util.c gpu.c cpu.c
+OBJ = ${SRC:%.c=obj/%.o}
 
 all: out
 
-.c.o:
-	${CC} -c ${DEFINES} ${CFLAGS} $<
+obj/%.o: %.c
+	${CC} ${DEFINES} ${CFLAGS} -o $@ -c $<
 
-${OBJ}: fluid.h util.h
+${OBJ}: util.h gpu.h cpu.h
 
 out: ${OBJ}
 	${CC} -o $@ ${OBJ} ${LDFLAGS}

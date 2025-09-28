@@ -11,9 +11,24 @@
 #include <dirent.h>
 #include <time.h>
 
-#include "fluid.h"
+#define N 1000
+#define SIZE ((N+2) * (N+2))
+#define IX(x, y) ((x)+(N+2)*(y))
+
+#define ANY_SHADER_TYPE 0
 
 typedef long long ns_t;
+
+typedef struct {
+	bool on_gpu;
+	size_t width, height;
+	char win_title[256];
+	int vsync;
+
+	float diff, visc;
+	float dt;
+	size_t n;
+} Settings;
 
 typedef struct {
 	size_t type;
@@ -27,6 +42,8 @@ typedef struct {
 	GLuint id;
 	size_t binding;
 	float data[SIZE]; 
+	void *ptr;
+	bool mapped;
 } ssbo_data;
 
 typedef struct {
@@ -44,12 +61,12 @@ struct buffers {
 extern unsigned int screen_texture;
 
 void renderQuad(void);
-void compile_shader(Shader *s);
+int compile_shader(Shader *s);
 char *load_shader_code(const char *path);
-void create_c_shader(Shader *s, GLuint ID);
-void create_vf_shaders(Shader *v, Shader *f);
+int create_c_shader(Shader *s, GLuint ID);
+int create_vf_shaders(Shader *v, Shader *f);
 GLenum get_shader_type_from(const char *file);
-void checkCompileErrors(GLuint shader, char *type);
+int checkCompileErrors(GLuint ID, GLenum pname);
 ssbo_data create_ssbo(size_t binding, GLenum usage);
 Shader load_shader_from_name(const char *name, GLenum type);
 GLXFBConfig create_fb_conf(Display *d, const int *attribList);

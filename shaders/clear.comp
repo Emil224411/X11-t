@@ -1,44 +1,47 @@
 #version 460 core
-#define N 100
-#define SIZE ((N+2) * (N+2))
 
-layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+layout (local_size_x = 32, local_size_y = 32, local_size_z = 1) in;
 
 layout (std430, binding = 1) buffer input_dens_buf { 
-	float dens_in[SIZE]; 
+	float dens_in[]; 
 };
 layout (std430, binding = 2) buffer input_u_buf { 
-	float u_in[SIZE]; 
+	float u_in[]; 
 };
 layout (std430, binding = 3) buffer input_v_buf { 
-	float v_in[SIZE];
+	float v_in[];
 };
 layout (std430, binding = 4) buffer output_dens_buf { 
-	float dens_out[SIZE]; 
+	float dens_out[]; 
 };
 layout (std430, binding = 5) buffer output_u_buf { 
-	float u_out[SIZE]; 
+	float u_out[]; 
 };
 layout (std430, binding = 6) buffer output_v_buf { 
-	float v_out[SIZE];
+	float v_out[];
 };
 layout (std430, binding = 7) buffer tmp_dens_buf { 
-	float dens_tmp[SIZE]; 
+	float dens_tmp[]; 
 };
 layout (std430, binding = 8) buffer tmp_u_buf { 
-	float u_tmp[SIZE]; 
+	float u_tmp[]; 
 };
 layout (std430, binding = 9) buffer tmp_v_buf { 
-	float v_tmp[SIZE]; 
+	float v_tmp[];
 };
-uniform float dt;
+uniform int n;
+uniform int v;
 
 void main()
 {
-	uint i = gl_GlobalInvocationID.x + (N+2) * (gl_GlobalInvocationID.y);
-	dens_out[i] += dt*dens_in[i];
-	u_out[i] += dt*u_in[i];
-	v_out[i] += dt*v_in[i];
+	uint i = gl_GlobalInvocationID.x + (n+2) * (gl_GlobalInvocationID.y);
+	dens_in[i] = 0.0;
+	u_in[i] = 0.0;
+	v_in[i] = 0.0;
+	dens_out[i] = 0.0;
+	u_out[i] = 0.0;
+	v_out[i] = 0.0;
+
 }
 
 

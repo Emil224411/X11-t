@@ -1,0 +1,44 @@
+#version 460 core
+//#define SIZE ((N+2) * (N+2))
+
+layout (local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout (std430, binding = 1) buffer input_dens_buf { 
+	float dens_in[]; 
+};
+layout (std430, binding = 2) buffer input_u_buf { 
+	float u_in[]; 
+};
+layout (std430, binding = 3) buffer input_v_buf { 
+	float v_in[];
+};
+layout (std430, binding = 4) buffer output_dens_buf { 
+	float dens_out[]; 
+};
+layout (std430, binding = 5) buffer output_u_buf { 
+	float u_out[]; 
+};
+layout (std430, binding = 6) buffer output_v_buf { 
+	float v_out[];
+};
+uniform float dt;
+uniform int n;
+
+/*
+ * add_source done in parallel for Vx, Vy and density since
+ * they don't read from each other
+ * swap input and output buffers when done
+ *
+ */
+void main()
+{
+	uint x = (gl_GlobalInvocationID.x+1);
+	uint y = (gl_GlobalInvocationID.y+1);
+	if (x > n || y > n) return;
+	uint i =  x + (n+2) * y; 
+	dens_out[i] += dt*dens_in[i];
+	u_out[i] += dt*u_in[i];
+	v_out[i] += dt*v_in[i];
+}
+
+

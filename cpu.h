@@ -1,7 +1,7 @@
-#ifndef FLUID_H
-#define FLUID_H
+#ifndef CPU_H
+#define CPU_H
 
-#define N 100
+#define N 1000
 #define SIZE ((N+2) * (N+2))
 
 #define IX(x, y) ((x)+(N+2)*(y))
@@ -15,4 +15,4 @@ void project(int n, float *u, float *v, float *p, float *div);
 void dens_step(int n, float *x, float *x0, float *u, float *v, float diff, float dt);
 void vel_step(int n, float *u, float *v, float *u0, float *v0, float visc, float dt);
 
-#endif//FLUID_H
+#endif//CPU_H

@@ -1,0 +1,36 @@
+#version 460 core
+#define IX(x, y) ((x)+(n+2)*(y))
+
+layout (local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout (std430, binding = 1) buffer div_buf { 
+	float div[]; 
+};
+layout (std430, binding = 2) buffer p_buf { 
+	float p[]; 
+};
+layout (std430, binding = 3) buffer u_buf { 
+	float u[];
+};
+layout (std430, binding = 4) buffer v_buf { 
+	float v[]; 
+};
+uniform int n;
+
+
+//project(N, u, v, u0, v0);
+void main()
+{
+	uint x = gl_GlobalInvocationID.x+1;
+	uint y = gl_GlobalInvocationID.y+1;
+	if (x > n || y > n) return;
+    float h = 1.0f/n;
+
+	u[IX(x, y)] -= 0.5f * (p[IX(x+1, y  )] - p[IX(x-1, y  )])/h;
+	v[IX(x, y)] -= 0.5f * (p[IX(x  , y+1)] - p[IX(x  , y-1)])/h;
+
+	//set_bnd(n, 1, u); 
+	//set_bnd(n, 2, v);
+}
+
+

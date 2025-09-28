@@ -1,0 +1,52 @@
+#version 460 core
+#define IX(x, y) ((x)+(n+2)*(y))
+
+layout (local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout (std430, binding = 1) buffer d_buf { 
+	float d[]; 
+};
+layout (std430, binding = 2) buffer d0_buf { 
+	float d0[]; 
+};
+layout (std430, binding = 3) buffer u_buf { 
+	float u[];
+};
+layout (std430, binding = 4) buffer v_buf { 
+	float v[]; 
+};
+uniform float dt;
+uniform int b;
+uniform int n;
+
+/*
+ * advect is run on either Vx, Vy or density since 
+ * they are reling on the output of the previus advection
+ * TODO look into how the inputs are done on cpu
+ */
+void main()
+{
+	uint i = gl_GlobalInvocationID.x+1;
+	uint j = gl_GlobalInvocationID.y+1;
+	if (i > n || j > n) return;
+	uint ind = i + (n+2) * j;
+
+	int i0, j0, i1, j1;
+    float x, y, s0, t0, s1, t1, dt0;
+	dt0 = dt * n;
+
+    x = float(i) - dt0 * u[ind];
+    y = float(j) - dt0 * v[ind];
+    if (x < 0.5f) x = 0.5f; 
+	if (x > n + 0.5f) x = n + 0.5f;
+    if (y < 0.5f) y = 0.5f; 
+	if (y > n + 0.5f) y = n + 0.5f;
+
+     i0 = int(floor(x)); i1 = i0 + 1;
+     j0 = int(floor(y)); j1 = j0 + 1;
+     s1 = x - float(i0); s0 = 1.0 - s1;
+     t1 = y - float(j0); t0 = 1.0 - t1;
+     d[ind] = s0 * (t0 * d0[IX(i0, j0)] + t1 * d0[IX(i0, j1)])+
+           	  s1 * (t0 * d0[IX(i1, j0)] + t1 * d0[IX(i1, j1)]);
+}
+

@@ -1,0 +1,47 @@
+#version 460 core
+#define IX(x, y) ((x)+(n+2)*(y))
+
+layout (local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout (std430, binding = 1) buffer x_buf { 
+	float x[]; 
+};
+uniform int b;
+uniform int n;
+uniform int not_vel;
+
+/*
+ * should be okay to read and write from the same buffer 
+ * since the edges are not being read from only writen to
+ */ 
+void main()
+{
+	//uint i = gl_GlobalInvocationID.x + (N+2) * (N+2-gl_GlobalInvocationID.y);
+	uint i = gl_GlobalInvocationID.x;
+
+	//sides
+	//corners
+	//if (i == n+1) {
+	//	x[IX(  0,   0)] = 0.5*(x[IX(1,   0)]+x[IX(  0, 1)]);
+	//	x[IX(  0, n+1)] = 0.5*(x[IX(1, n+1)]+x[IX(  0, n)]);
+	//	x[IX(n+1,   0)] = 0.5*(x[IX(n,   0)]+x[IX(n+1, 1)]);
+	//	x[IX(n+1, n+1)] = 0.5*(x[IX(n, n+1)]+x[IX(n+1, n)]);
+	//} else {
+		if (b == 1) {
+			x[IX(  0,   i)] = -x[IX(1, i)];
+			x[IX(n+1,   i)] = -x[IX(n, i)];
+		} else {
+			x[IX(  0,   i)] = x[IX(1, i)];
+			x[IX(n+1,   i)] = x[IX(n, i)];
+		}
+		if (b == 2) {
+			x[IX(i,    0)] = -x[IX(i, 1)];
+			x[IX(i,  n+1)] = -x[IX(i, n)];
+		} else {
+			x[IX(i,    0)] = x[IX(i, 1)];
+			x[IX(i,  n+1)] = x[IX(i, n)];
+		}
+	//}
+}
+
+
