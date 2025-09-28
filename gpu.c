@@ -8,6 +8,7 @@ Shader *advect_shader, *set_bnd_shader;
 Shader *project_shader, *project_s1_shader, *project_s2_shader;
 Shader *lin_solve_shader;
 
+// refator plz
 int init_shaders(void) 
 {
 	int found = load_all_shaders_from(SHADER_DIR, ANY_SHADER_TYPE, shaders, SHADER_LEN);
@@ -171,7 +172,6 @@ void dispatch_diffuse(int n, int b, ssbo_data *input, ssbo_data *output, ssbo_da
 	dispatch_jacobi(n, b, output, input, tmp, a, 1+4*a, 100);
 }
 
-//step 1: p and div = output, lin_solve?, step 3: p = u_in, Vx, Vy = u_out, v_out
 void dispatch_project(int n, ssbo_data *Vx, ssbo_data *Vy, ssbo_data *p, ssbo_data *div, ssbo_data *tmp)
 {
 	GLint prev_ids[9];
@@ -187,7 +187,7 @@ void dispatch_project(int n, ssbo_data *Vx, ssbo_data *Vy, ssbo_data *p, ssbo_da
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
 	dispatch_set_bnd(n, 0, div);
-	dispatch_set_bnd(n, 1,   p);
+	dispatch_set_bnd(n, 0,   p);
 
 	dispatch_jacobi(n, 0, p, div, tmp, 1.0, 4.0, 100);
 

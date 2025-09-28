@@ -20,10 +20,21 @@
 #include "gpu.h"
 #include "cpu.h"
 
-/*
+/* 
  *
  * TODO
+ * implement non sqaure aspect ratio 
+ * implement i think it was called xinput2 but better touch controls
+ * (would be cool to work with raw data from touchpad but i dont got time for all that or...)
+ *
  * implement Red-Black Gauss-Seidel may help with the current set_bnd problems????
+ * i dont actually think there is a problem with set_bnd when running at 250x250 it
+ * seems to behave fine so maby just a problem when running at 1000x1000? but idk
+ *
+ * test for best workgroupe/localgroup size
+ *
+ * add text rendering :/ (for ui stuff)
+ * add ui elements for controling stuff
  *
  * when loading shaders check for uniforms and save their names and locations
  * and create a function for setting uniforms
@@ -33,21 +44,11 @@
  * create a shotdown function for freeing memory etc.
  * related to shutdown function clean up memory
  * currently there is alot of allocated memory that never gets freed
- *
- * add text rendering:/(for ui stuff)
- * add ui elements for controling stuff
- *
  */
 
+//not really in use no more but keeping it around just in case
 #define TARGET_FPS 30
 #define FRAME_TIME_NS (1000000000 / TARGET_FPS)
-
-#define WIDTH 1000
-#define HEIGHT 1000
-
-#define DIFF 0.00005f
-#define VISC 0.00003f
-#define DT 0.001f
 
 typedef GLXContext (*glXCreateContextAttribsARBProc)(Display*, GLXFBConfig, GLXContext, Bool, const int*);
 typedef int (*PFNGLXSWAPINTERVALSGI)(int interval);
@@ -108,6 +109,7 @@ void step_on_gpu(void)
 
 }
 
+// switch_to_gpu and switch_to_cpu should be rewriten they look like shit
 void switch_to_gpu(void) 
 {
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, all_b.input.u.id);
@@ -162,22 +164,22 @@ void switch_to_cpu(void)
 
 void step_cpu(void)
 {
-	add_source(s.n, u, u_prev, DT); 
-	add_source(s.n, v, v_prev, DT);
-    add_source(s.n, dens, dens_prev, DT);
+	add_source(s.n, u, u_prev, s.dt); 
+	add_source(s.n, v, v_prev, s.dt);
+    add_source(s.n, dens, dens_prev, s.dt);
 
-	diffuse(s.n, 0, dens_prev, dens, DIFF, DT);
-	diffuse(s.n, 1, u_prev, u, VISC, DT);
-	diffuse(s.n, 2, v_prev, v, VISC, DT);
+	diffuse(s.n, 0, dens_prev, dens, s.diff, s.dt);
+	diffuse(s.n, 1, u_prev, u, s.visc, s.dt);
+	diffuse(s.n, 2, v_prev, v, s.visc, s.dt);
 
 	project(s.n, u_prev, v_prev, u, v);
 
-	advect(s.n, 1, u, u_prev, u_prev, v_prev, DT); 
-	advect(s.n, 2, v, v_prev, u_prev, v_prev, DT);
+	advect(s.n, 1, u, u_prev, u_prev, v_prev, s.dt); 
+	advect(s.n, 2, v, v_prev, u_prev, v_prev, s.dt);
 		
 	project(s.n, u, v, u_prev, v_prev);
 		
-	advect (s.n, 0, dens, dens_prev, u, v, DT);
+	advect (s.n, 0, dens, dens_prev, u, v, s.dt);
 }
 void dispatch_visuualize(void)
 {
@@ -247,9 +249,10 @@ int main(void)
 		return -1;
 	}
 	create_vf_shaders(sv, sf);
-	create_screen_texture(sv->ID, WIDTH, HEIGHT);
+	create_screen_texture(sv->ID, s.width, s.height);
 
 	glUseProgram(sc->ID);
+	// add error checks and handling
 	all_b.input.dens = create_ssbo(1, GL_DYNAMIC_DRAW);
 	all_b.input.u = create_ssbo(2, GL_DYNAMIC_DRAW);
 	all_b.input.v = create_ssbo(3, GL_DYNAMIC_DRAW);
@@ -273,6 +276,7 @@ int main(void)
 		}
 
 		if (s.on_gpu) {
+			// refator shit
 			glBindBuffer(GL_SHADER_STORAGE_BUFFER, all_b.input.u.id);
 			glBufferSubData(GL_SHADER_STORAGE_BUFFER, 
 							0, 
@@ -327,6 +331,7 @@ int main(void)
 		}
 		*/
 	}
+	// free more stuff!!!!!!!1
 	free(sc->code);
 	free(sv->code);
 	free(sf->code);
@@ -339,19 +344,19 @@ int main(void)
 
 void mouse_moved(XMotionEvent e, int prev_x, int prev_y, int prev_time) 
 {
-	int x = e.x / (WIDTH  / s.n);
-	int y = e.y / (HEIGHT / s.n);
+	int x = e.x / (s.width/ s.n);
+	int y = e.y / (s.height / s.n);
 	if (x > s.n+2 || x < 0 || y > s.n+2 || y < 0) return;
 
-	int px = prev_x / (WIDTH / s.n);
-	int py = prev_y / (HEIGHT / s.n);
+	int px = prev_x / (s.width / s.n);
+	int py = prev_y / (s.height / s.n);
 	float dx = x - px;
 	float dy = y - py;
 	
 	int dt = e.time - prev_time;
 	if (dt <= 0) dt = 1;
 	
-	float speed = sqrtf(dx*dx + dy*dy) / DT;
+	float speed = sqrtf(dx*dx + dy*dy) / s.dt;
 	float force = speed * 2.0;
 
 	if (e.state & Button3Mask) 
@@ -440,7 +445,7 @@ bool handle_Xevents(XEvent ev)
 	return should_quit;
 }
 
-
+// maby refator?????
 int init(void)
 {
 	d = XOpenDisplay(NULL);
@@ -482,8 +487,8 @@ int init(void)
 					  root, 
 					  0, 
 					  0, 
-					  WIDTH, 
-					  HEIGHT, 
+					  s.width, 
+					  s.height, 
 					  0, 
 					  vi->depth, 
 					  InputOutput, 

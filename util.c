@@ -61,6 +61,7 @@ void create_screen_texture(GLuint ID, size_t width, size_t height)
 	glBindImageTexture(0, screen_texture, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
 }
 
+// add error check Mr. lazy
 ssbo_data create_ssbo(size_t binding, GLenum usage) 
 {
 	ssbo_data ssbo = { .binding = binding };
@@ -269,6 +270,8 @@ int create_c_shader(Shader *s, GLuint ID)
 														s->file_name, s->ID);
 		return -1;
 	}
+	// deleting shader but saving the id not good but i think i allready made a 
+	// comment some were else saying the same thing
 	glDeleteShader(s->sID);
 	return 0;
 }
@@ -295,7 +298,7 @@ int create_vf_shaders(Shader *v, Shader *f)
 																		 ID);
 		return -1;
 	}
-
+	// same as create_c_shader deleting but saving sID
 	glDeleteShader(f->sID);
 	glDeleteShader(v->sID);
 	return 0;
@@ -304,16 +307,19 @@ int create_vf_shaders(Shader *v, Shader *f)
 int compile_shader(Shader *s)
 {
 	s->sID = glCreateShader(s->type);
+	// maby should check for error here?
 	glShaderSource(s->sID, 1, (const char *const*)&s->code, NULL);
 	glCompileShader(s->sID);
 	return checkCompileErrors(s->sID, GL_COMPILE_STATUS);
 }
 
+// tbh AI wrote this function and i dont know why it does what it does
 GLXFBConfig create_fb_conf(Display *d, const int *attribList)
 {
 	int fb_c;
 	GLXFBConfig *fbc = glXChooseFBConfig(d, DefaultScreen(d), attribList, &fb_c);
 
+	// why all -1?????? idk 
 	int best = -1, worst = -1, best_sample = -1;
 	int best_samples = -1;
 	for (int i = 0; i < fb_c; i++) {
@@ -331,6 +337,7 @@ GLXFBConfig create_fb_conf(Display *d, const int *attribList)
 				best_samples = samples;
 				best_sample = i;
 			}
+			// why save the worst option??? Mr. robt
 			if (worst < 0 || !sample_buffers) {
 				worst = i;
 			}

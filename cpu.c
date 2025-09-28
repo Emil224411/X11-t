@@ -60,7 +60,7 @@ void advect(int n, int b, float *d, float *d0, float *u, float *v, float dt)
                           s1 * (t0 * d0[IX(i1, j0)] + t1 * d0[IX(i1, j1)]);
         }
     }
-    //set_bnd(n, b, d);
+    set_bnd(n, b, d);
 }
 
 void project(int n, float *u, float *v, float *p, float *div) 
