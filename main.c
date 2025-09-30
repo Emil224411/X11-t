@@ -1,3 +1,4 @@
+#include <X11/extensions/XI2.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,7 +11,10 @@
 #include <sys/stat.h>
 #include <dirent.h>
 
+#include <X11/X.h>
 #include <X11/Xlib.h>
+#include <X11/extensions/XInput.h>
+#include <X11/extensions/XInput2.h>
 #include <X11/Xatom.h>
 #include <GL/glew.h>
 #include <GL/gl.h>
@@ -23,16 +27,29 @@
 /* 
  *
  * TODO
- * implement non sqaure aspect ratio 
- * implement i think it was called xinput2 but better touch controls
+ *
+ * need input EV_ABS, ABS_X, ABS_Y and ABS_PRESSURE would be neat too(use evtest to see events) 
+ * main problem is that X11 treats the trackpad as a pointer(thingy) and only gives the
+ * pointer x, y. the events/data(whatever you call it) is there, how to get it
+ * without root idk but figure something out
  * (would be cool to work with raw data from touchpad but i dont got time for all that or...)
  *
+ * test for best workgroupe/localgroup size
+ * add a way to simply change workgroupe/local_size should be relativly simple 
+ * since the shader code is allready loaded you could just edit it from c
+ * tho i have to decide if the changes should be save e.g changing compute.comp from 16 to 32
+ * should the new code be saved the the shader file or just kept in memory
+ * this will also force me to change the way glDispatchCompute is called
+ * so i will properly have to "abstract" it away or implement a "wrapper" for glDispatchCompute
+ *
+ * implement non sqaure aspect ratio 
  * implement Red-Black Gauss-Seidel may help with the current set_bnd problems????
  * i dont actually think there is a problem with set_bnd when running at 250x250 it
  * seems to behave fine so maby just a problem when running at 1000x1000? but idk
  *
- * test for best workgroupe/localgroup size
+ * init function for gpu.c/.h and util.c/.h currently using main.c's init function
  *
+ * really dont feel like adding text rendering so im putting it off
  * add text rendering :/ (for ui stuff)
  * add ui elements for controling stuff
  *
@@ -41,13 +58,12 @@
  *
  * IMPORTANT!!!!
  * (it still works without, so i havent done it yet)
- * create a shotdown function for freeing memory etc.
- * related to shutdown function clean up memory
- * currently there is alot of allocated memory that never gets freed
+ * clean up memory
+ * currently there is alot(maby not alot but there is some) of allocated memory that never gets freed
  */
 
-//not really in use no more but keeping it around just in case
-#define TARGET_FPS 30
+// nvm still usefull on laptop
+#define TARGET_FPS 60
 #define FRAME_TIME_NS (1000000000 / TARGET_FPS)
 
 typedef GLXContext (*glXCreateContextAttribsARBProc)(Display*, GLXFBConfig, GLXContext, Bool, const int*);
@@ -55,6 +71,12 @@ typedef int (*PFNGLXSWAPINTERVALSGI)(int interval);
 static glXCreateContextAttribsARBProc glXCreateContextAttribsARB = 0;
 static PFNGLXSWAPINTERVALSGI glXSwapIntervalSGI = 0;
 
+typedef struct {
+	unsigned int texID;
+	int width, height;
+	int BearingX, BearingY;
+	unsigned int advance;
+} Character;
 
 struct buffers all_b = { 
 	{ {0}, {0}, {0} }, 
@@ -62,6 +84,8 @@ struct buffers all_b = {
 	{ {0}, {0}, {0} } 
 };
 
+// no reason to use comments here when you can use
+// .width = 1000, and so on
 Settings s= { 
 			true, 		//width
 			1000, 		//width
@@ -71,12 +95,14 @@ Settings s= {
 			0.00001f, 	//diff
 			0.00002f, 	//visc
 			0.01f, 		//dt
-			1000, 		//n(n can/should not be change yet)
+			250, 		//n(n can/should not be change yet)
 };
 
 Window w;
 Display *d;
+Colormap cmap;
 GLXContext glc;
+XVisualInfo *vi;
 Atom wm_delete_window;
 
 int prev_x = 0, prev_y = 0, prev_mtime = 0;
@@ -86,6 +112,8 @@ float dens_prev[SIZE], u_prev[SIZE], v_prev[SIZE];
 
 int init(void);
 ns_t now_ns(void);
+int init_ft(void);
+void shutdown(void);
 bool handle_Xevents(XEvent ev);
 bool handle_KeyPress(XKeyEvent ke);
 void mouse_moved(XMotionEvent e, int prev_x, int prev_y, int prev_time);
@@ -263,13 +291,14 @@ int main(void)
 	all_b.tmp.u = create_ssbo(8, GL_DYNAMIC_DRAW);
 	all_b.tmp.v = create_ssbo(9, GL_DYNAMIC_DRAW);
 	
+
 	int frames = 0;
 	double elapsed = 0.0, now = 0.0, last = 0.0;
 
 	XEvent ev; 
 	bool quit = false;
 	while (!quit) {
-		//ns_t frame_start = now_ns();
+		ns_t frame_start = now_ns();
 		while (XPending(d) > 0) {
 			XNextEvent(d,&ev);
 			quit = handle_Xevents(ev);
@@ -303,44 +332,63 @@ int main(void)
 		glUseProgram(sv->ID);
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_2D, screen_texture);
-		glUniform1f(glGetUniformLocation(sv->ID, "scale"), s.width/s.n);
+		glUniform1f(glGetUniformLocation(sv->ID, "scale"), (float)s.width/(float)s.n);
 		renderQuad();
 
 		glXSwapBuffers(d, w);
 
-		//ns_t frame_end = now = now_ns();
-		now = now_ns()/1e9f;
+		ns_t frame_end = now = now_ns();
+		now /= 1e9f;
 
 		frames++;
 		elapsed = now-last;
 		if (elapsed >= 1.0) {
 			char title[256];
 			snprintf(title, sizeof(title), "Fluid sim on %s. fps: %f, grid: %ld*%ld = %ld", 
-					(s.on_gpu ? "GPU" : "CPU"), frames/elapsed, s.n, s.n, s.n*s.n);
+							(s.on_gpu ? "GPU" : "CPU"), frames/elapsed, s.n, s.n, s.n*s.n);
 			XStoreName(d, w, title);
 			frames = 0;
 			last = now;
 		}
-		/*ns_t frame_time = frame_end - frame_start;
-		if (frame_time < FRAME_TIME_s.nS) {
-			ns_t sleep_ns = FRAME_TIME_s.nS - frame_time;
+		ns_t frame_time = frame_end - frame_start;
+		if (frame_time < FRAME_TIME_NS) {
+			ns_t sleep_ns = FRAME_TIME_NS - frame_time;
 			struct timespec ts; 
 			ts.tv_sec  = sleep_ns / 1000000000LL; 
 			ts.tv_nsec = sleep_ns % 1000000000LL;
-			nanosleep(&ts, s.nULL);
+			nanosleep(&ts, NULL);
 		}
-		*/
 	}
-	// free more stuff!!!!!!!1
-	free(sc->code);
-	free(sv->code);
-	free(sf->code);
+	shutdown();
 	glXMakeCurrent(d, None, NULL);
 	glXDestroyContext(d, glc);
 	XDestroyWindow(d, w);
 	XCloseDisplay(d);
 	return 0;
 }
+
+void shutdown(void)
+{
+	for (int i = 0; i < SHADER_LEN; i++) {
+		if (shaders[i].loaded) {
+			free(shaders[i].code);
+			shaders[i].loaded = false;
+		}
+		if (shaders[i].type != GL_VERTEX_SHADER 
+		&&  shaders[i].type != GL_FRAGMENT_SHADER) {
+			glDeleteProgram(shaders[i].ID);
+			shaders[i].ID = 0;
+		}
+	}
+	// sv and sf use the same program so deleting sv->ID also deletes sf->ID
+	glDeleteProgram(sv->ID);
+	sv->ID = sf->ID = 0;
+	glDeleteBuffers(all_buffer_used, all_buffer_ids);
+	glDeleteVertexArrays(1, &quadVAO);
+	glDeleteBuffers(1, &quadVBO);
+	glDeleteTextures(1, &screen_texture);
+}
+
 
 void mouse_moved(XMotionEvent e, int prev_x, int prev_y, int prev_time) 
 {
@@ -424,9 +472,36 @@ bool handle_KeyPress(XKeyEvent ke)
 	return should_quit;
 }
 
+
+
+int opcode;
+XIEventMask mask;
+unsigned char m[1];
+void handle_XIevents(XGenericEventCookie ev)
+{
+	switch (ev.evtype) {
+		case XI_TouchUpdate: {
+			XIDeviceEvent *xie = (XIDeviceEvent *)ev.data;
+			printf("XI_TouchUpdate: %f, %f\n", xie->event_x, xie->event_y);
+		} break;
+		case XI_TouchBegin: {
+			XIDeviceEvent *xie = (XIDeviceEvent *)ev.data;
+			printf("XI_TouchBegin: %f, %f\n", xie->event_x, xie->event_y);
+		} break;
+		case XI_Motion: {
+			XIDeviceEvent *xie = (XIDeviceEvent *)ev.data;
+			printf("XI_Motion: %f, %f\n", xie->event_x, xie->event_y);
+		} break;
+	}
+}
 bool handle_Xevents(XEvent ev)
 {
 	bool should_quit = false;
+	if (ev.xcookie.type == GenericEvent &&
+		ev.xcookie.extension == opcode  &&
+		XGetEventData(d, &ev.xcookie)) {
+		handle_XIevents(ev.xcookie);
+	}
 	switch (ev.type) {
 		case KeyPress:
 			should_quit = handle_KeyPress(ev.xkey);
@@ -467,7 +542,7 @@ int init(void)
 	};
 	GLXFBConfig fbc = create_fb_conf(d, fb_att);
 
-	XVisualInfo *vi = glXGetVisualFromFBConfig(d, fbc);
+	vi = glXGetVisualFromFBConfig(d, fbc);
 	if (vi == NULL) {
 		fprintf(stderr, "Error: glXChooseVisual failed\n");
 		XCloseDisplay(d);
@@ -503,6 +578,37 @@ int init(void)
 	Atom wm_type_dialog = XInternAtom(d, "_NET_WM_WINDOW_TYPE_DIALOG", False);
 	XChangeProperty(d, w, wm_type, XA_ATOM, 32, 
 				PropModeReplace, (unsigned char *)&wm_type_dialog, 1);
+
+	int n;
+
+	int event, error;
+	if (!XQueryExtension(d, "XInputExtension", &opcode, &event, &error)) {
+		fprintf(stderr, "Error: XInputExtension not supported\n");
+		XDestroyWindow(d, w);
+		XCloseDisplay(d);
+		return -1;
+	}
+	XDeviceInfo touchpad;
+	bool found = false;
+	XDeviceInfo *di = XListInputDevices(d, &n);
+	for (int i = 0; i < n; i++) {
+		if (strcmp(di[i].name, "Apple Inc. Magic Trackpad USB-C") == 0) {
+			printf("found: %s\n", di[i].name);
+			touchpad = di[i];
+			found = true;
+		}
+	}
+
+	mask.deviceid = found ? touchpad.id : XIAllDevices;
+	mask.mask_len = sizeof(m);
+	mask.mask = m;
+	XISetMask(mask.mask, XI_Motion);
+	XISetMask(mask.mask, XI_RawMotion);
+	XISetMask(mask.mask, XI_TouchBegin);
+	XISetMask(mask.mask, XI_TouchUpdate);
+	XISetMask(mask.mask, XI_TouchEnd);
+
+	XISelectEvents(d, root, &mask, 1);
 
 	XMapWindow(d, w);
 

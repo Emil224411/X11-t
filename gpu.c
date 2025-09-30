@@ -169,7 +169,7 @@ void dispatch_jacobi(int n, int b, ssbo_data *x, ssbo_data *x0, ssbo_data *x_new
 void dispatch_diffuse(int n, int b, ssbo_data *input, ssbo_data *output, ssbo_data *tmp, float diff, float dt)
 {
 	float a = dt * diff * n * n;
-	dispatch_jacobi(n, b, output, input, tmp, a, 1+4*a, 100);
+	dispatch_jacobi(n, b, output, input, tmp, a, 1+4*a, 40);
 }
 
 void dispatch_project(int n, ssbo_data *Vx, ssbo_data *Vy, ssbo_data *p, ssbo_data *div, ssbo_data *tmp)
@@ -189,7 +189,7 @@ void dispatch_project(int n, ssbo_data *Vx, ssbo_data *Vy, ssbo_data *p, ssbo_da
 	dispatch_set_bnd(n, 0, div);
 	dispatch_set_bnd(n, 0,   p);
 
-	dispatch_jacobi(n, 0, p, div, tmp, 1.0, 4.0, 100);
+	dispatch_jacobi(n, 0, p, div, tmp, 1.0, 4.0, 40);
 
 	glUseProgram(project_s2_shader->ID);
 	glUniform1i(glGetUniformLocation(project_s2_shader->ID, "n"), n);

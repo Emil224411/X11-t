@@ -18,6 +18,7 @@
 #define SHADER_LEN 14
 extern Shader shaders[SHADER_LEN];
 extern Shader *sc, *sf, *sv;
+extern Shader *text_vert, *text_frag;
 extern Shader *add_source_shader, *diffuse_shader;
 extern Shader *advect_shader, *set_bnd_shader;
 extern Shader *project_shader, *project_s1_shader, *project_s2_shader;

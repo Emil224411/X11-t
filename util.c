@@ -1,6 +1,8 @@
 #include "util.h"
-#include "gpu.h"
 #include <stdio.h>
+#include <stdlib.h>
+GLuint all_buffer_ids[MAX_BUFFER_AMOUNT];
+size_t all_buffer_used;
 
 unsigned int screen_texture;
 unsigned int quadVAO = 0;
@@ -62,15 +64,28 @@ void create_screen_texture(GLuint ID, size_t width, size_t height)
 }
 
 // add error check Mr. lazy
+// binding should allways be > 0, because screen_texture is allways bound to 0
 ssbo_data create_ssbo(size_t binding, GLenum usage) 
 {
 	ssbo_data ssbo = { .binding = binding };
+	if (binding < 1) {
+		fprintf(stderr, "Error: create_ssbo: Binding should be > 0\n");
+		ssbo.binding = 0;
+		return ssbo;
+	}
+	if (all_buffer_used+1 >= MAX_BUFFER_AMOUNT) {
+		fprintf(stderr, "Error: cannont create more buffers MAX_BUFFER_AMOUNT reached\n");
+		ssbo.binding = 0;
+		ssbo.id = 0;
+		return ssbo;
+	}
 	glGenBuffers(1, &ssbo.id);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo.id);
 	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(ssbo.data), NULL, usage);
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, ssbo.binding, ssbo.id);
 
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+	all_buffer_ids[all_buffer_used++] = ssbo.id;
 	return ssbo;
 }
 
@@ -158,10 +173,11 @@ int load_all_shaders_from(const char *dir, GLenum of_type, Shader *save_to, size
 		if ((file_type == of_type && of_type != 0) || (of_type == 0 && file_type != 0)) {
 			save_to[i].type = file_type;
 			strncpy(save_to[i].file_name, de->d_name, 256);
-			//fprintf(stdout, "Info: load_all_shaders_from: found \"%s\" at \"%s\"\n", de->d_name, path);
+			fprintf(stdout, "Info: load_all_shaders_from: found \"%s\" at \"%s\"\n", de->d_name, path);
 			strncat(path, save_to[i].file_name, 256);
 			save_to[i].code = load_shader_code(path);
 			if (!save_to[i].code) goto err_n_out;
+			save_to[i].loaded = true;
 			strncpy(path, SHADER_DIR, 512);
 			i++;
 		} 

@@ -1,5 +1,6 @@
 #ifndef UTIL_H
 #define UTIL_H
+//#include "gpu.h"
 #include <GL/glew.h>
 #include <GL/gl.h>
 #include <GL/glx.h>
@@ -11,11 +12,12 @@
 #include <dirent.h>
 #include <time.h>
 
-#define N 1000
+#define N 250
 #define SIZE ((N+2) * (N+2))
 #define IX(x, y) ((x)+(N+2)*(y))
 
 #define ANY_SHADER_TYPE 0
+#define  MAX_BUFFER_AMOUNT 256
 
 typedef long long ns_t;
 
@@ -45,6 +47,8 @@ typedef struct {
 	void *ptr;
 	bool mapped;
 } ssbo_data;
+extern GLuint all_buffer_ids[MAX_BUFFER_AMOUNT];
+extern size_t all_buffer_used;
 
 typedef struct {
 	ssbo_data dens;
@@ -59,6 +63,8 @@ struct buffers {
 };
 
 extern unsigned int screen_texture;
+extern unsigned int quadVAO;
+extern unsigned int quadVBO;
 
 void renderQuad(void);
 int compile_shader(Shader *s);
