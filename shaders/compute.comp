@@ -38,9 +38,9 @@ void main()
 	ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
 	uint i = pos.x + (n+2) * ((n+2)-pos.y);
 	vec4 val = vec4(0.0, 0.0, 0.0, 1.0);
-	val.r = dens_out[i];
-	val.g = dens_out[i];
-	val.b = dens_out[i];
+	val.r = float(pos.x)/gl_NumWorkGroups.x * dens_out[i];
+	//val.g = dens_out[i];
+	val.b = float(pos.y)/gl_NumWorkGroups.y * dens_out[i];
 	
 	if (v != 0) val += sqrt(abs(u_out[i]*u_out[i])+abs(v_out[i]*v_out[i]));
 

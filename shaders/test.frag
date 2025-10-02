@@ -12,12 +12,15 @@ float hash(vec2 p) {
 void main()
 {             
 	vec3 dens = texture(tex, TexCoords).rgb;
+    FragColor = vec4(dens, 1.0);
+	/*
 	float rnd = hash(gl_FragCoord.xy);
 	if (rnd < dens.r) {
     	FragColor = vec4(dens, 1.0);
 	} else {
 		discard;
 	}
+	*/
 }
 
 

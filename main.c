@@ -1,20 +1,26 @@
-#include <X11/extensions/XI2.h>
-#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdint.h>
+#include <stddef.h>
+#include <unistd.h>
+
 #include <stdbool.h>
+#include <stdint.h>
+
+#include <string.h>
+#include <dirent.h>
+#include <memory.h>
 #include <time.h>
 #include <math.h>
-#include <memory.h>
-#include <string.h>
+
 #include <sys/stat.h>
-#include <dirent.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+
+#include <linux/input.h>
 
 #include <X11/X.h>
 #include <X11/Xlib.h>
-#include <X11/extensions/XInput.h>
-#include <X11/extensions/XInput2.h>
 #include <X11/Xatom.h>
 #include <GL/glew.h>
 #include <GL/gl.h>
@@ -113,7 +119,7 @@ float dens_prev[SIZE], u_prev[SIZE], v_prev[SIZE];
 int init(void);
 ns_t now_ns(void);
 int init_ft(void);
-void shutdown(void);
+void shutdown_all(void);
 bool handle_Xevents(XEvent ev);
 bool handle_KeyPress(XKeyEvent ke);
 void mouse_moved(XMotionEvent e, int prev_x, int prev_y, int prev_time);
@@ -295,10 +301,25 @@ int main(void)
 	int frames = 0;
 	double elapsed = 0.0, now = 0.0, last = 0.0;
 
+	int server_socket;
+	struct sockaddr_un server_addr;
+	int con_res;
+	struct input_event inbuf[64];
+	//server_socket = socket(AF_UNIX, SOCK_STREAM, 0);
+	//server_addr.sun_family = AF_UNIX;
+	//strcpy(server_addr.sun_path, "inputd/unix_socket");
+	//con_res = connect(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr));
+	//if (con_res == -1) {
+	//	perror("uhhhhh");
+	//	shutdown_all();
+	//	return -1;
+	//}
 	XEvent ev; 
 	bool quit = false;
 	while (!quit) {
 		ns_t frame_start = now_ns();
+		//recv(server_socket, &inbuf, sizeof(inbuf), 0);
+		//printf("%ld", inbuf[0].time.tv_usec);
 		while (XPending(d) > 0) {
 			XNextEvent(d,&ev);
 			quit = handle_Xevents(ev);
@@ -359,7 +380,8 @@ int main(void)
 			nanosleep(&ts, NULL);
 		}
 	}
-	shutdown();
+	//close(server_socket);
+	shutdown_all();
 	glXMakeCurrent(d, None, NULL);
 	glXDestroyContext(d, glc);
 	XDestroyWindow(d, w);
@@ -367,7 +389,7 @@ int main(void)
 	return 0;
 }
 
-void shutdown(void)
+void shutdown_all(void)
 {
 	for (int i = 0; i < SHADER_LEN; i++) {
 		if (shaders[i].loaded) {
@@ -472,36 +494,9 @@ bool handle_KeyPress(XKeyEvent ke)
 	return should_quit;
 }
 
-
-
-int opcode;
-XIEventMask mask;
-unsigned char m[1];
-void handle_XIevents(XGenericEventCookie ev)
-{
-	switch (ev.evtype) {
-		case XI_TouchUpdate: {
-			XIDeviceEvent *xie = (XIDeviceEvent *)ev.data;
-			printf("XI_TouchUpdate: %f, %f\n", xie->event_x, xie->event_y);
-		} break;
-		case XI_TouchBegin: {
-			XIDeviceEvent *xie = (XIDeviceEvent *)ev.data;
-			printf("XI_TouchBegin: %f, %f\n", xie->event_x, xie->event_y);
-		} break;
-		case XI_Motion: {
-			XIDeviceEvent *xie = (XIDeviceEvent *)ev.data;
-			printf("XI_Motion: %f, %f\n", xie->event_x, xie->event_y);
-		} break;
-	}
-}
 bool handle_Xevents(XEvent ev)
 {
 	bool should_quit = false;
-	if (ev.xcookie.type == GenericEvent &&
-		ev.xcookie.extension == opcode  &&
-		XGetEventData(d, &ev.xcookie)) {
-		handle_XIevents(ev.xcookie);
-	}
 	switch (ev.type) {
 		case KeyPress:
 			should_quit = handle_KeyPress(ev.xkey);
@@ -578,37 +573,6 @@ int init(void)
 	Atom wm_type_dialog = XInternAtom(d, "_NET_WM_WINDOW_TYPE_DIALOG", False);
 	XChangeProperty(d, w, wm_type, XA_ATOM, 32, 
 				PropModeReplace, (unsigned char *)&wm_type_dialog, 1);
-
-	int n;
-
-	int event, error;
-	if (!XQueryExtension(d, "XInputExtension", &opcode, &event, &error)) {
-		fprintf(stderr, "Error: XInputExtension not supported\n");
-		XDestroyWindow(d, w);
-		XCloseDisplay(d);
-		return -1;
-	}
-	XDeviceInfo touchpad;
-	bool found = false;
-	XDeviceInfo *di = XListInputDevices(d, &n);
-	for (int i = 0; i < n; i++) {
-		if (strcmp(di[i].name, "Apple Inc. Magic Trackpad USB-C") == 0) {
-			printf("found: %s\n", di[i].name);
-			touchpad = di[i];
-			found = true;
-		}
-	}
-
-	mask.deviceid = found ? touchpad.id : XIAllDevices;
-	mask.mask_len = sizeof(m);
-	mask.mask = m;
-	XISetMask(mask.mask, XI_Motion);
-	XISetMask(mask.mask, XI_RawMotion);
-	XISetMask(mask.mask, XI_TouchBegin);
-	XISetMask(mask.mask, XI_TouchUpdate);
-	XISetMask(mask.mask, XI_TouchEnd);
-
-	XISelectEvents(d, root, &mask, 1);
 
 	XMapWindow(d, w);
 
